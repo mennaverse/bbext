@@ -18,6 +18,22 @@ export async function loadBBModel(filePath: string): Promise<BBModel> {
   const raw = await readFile(filePath, "utf8");
   const normalized = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
   const parsed = JSON.parse(normalized) as BBModel;
+
+  // Compatibility pass inspired by Blockbench's project codec.
+  if ((!parsed.elements || parsed.elements.length === 0) && Array.isArray(parsed.cubes)) {
+    parsed.elements = parsed.cubes;
+  }
+  if (!parsed.model_identifier && parsed.geometry_name) {
+    parsed.model_identifier = parsed.geometry_name;
+  }
+  if (Array.isArray(parsed.textures)) {
+    for (const texture of parsed.textures) {
+      if (!texture.path && texture.relative_path) {
+        texture.path = texture.relative_path;
+      }
+    }
+  }
+
   return parsed;
 }
 

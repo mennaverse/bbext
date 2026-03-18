@@ -56,6 +56,8 @@ Options:
 - `--ext, -e`: export extension (`obj`, `gltf`, `fbx`)
 - `--scale, -s`: applied scale (default `0.0625`)
 - `--split-by-texture`: export each texture as a separate model file
+- `--split-by-all-declared-textures, -a`: export one file per declared texture, even if unused by faces
+- `--organize-by-model`: create one folder per `.bbmodel` using `file-name` or `model-id`
 - `--model-scale`: model scale for glTF
 - `--embed-textures`: embed textures in glTF when available
 - `--export-groups-as-armature`: export outliner groups as an armature in glTF
@@ -81,6 +83,26 @@ bbext -i ./models -o ./exports -e obj --split-by-texture --overwrite
 ```
 
 When `--split-by-texture` is enabled, output files receive a texture suffix such as `character__skin.obj` or `character__metal.gltf`.
+
+Split one `.bbmodel` into one output file for every declared texture:
+
+```bash
+bbext -i ./models -o ./exports -e gltf -a --overwrite
+```
+
+Organize each exported model inside its own folder:
+
+```bash
+bbext -i ./models -o ./exports -e gltf --organize-by-model file-name --overwrite
+```
+
+Or organize by the model identifier when available:
+
+```bash
+bbext -i ./models -o ./exports -e gltf --organize-by-model model-id --overwrite
+```
+
+When `--organize-by-model model-id` is used and the model has no explicit ID, the exporter falls back to the source file name.
 
 ## Export flow
 

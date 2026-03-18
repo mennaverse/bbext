@@ -9,6 +9,8 @@ interface CliOptions {
   ext: "obj" | "gltf" | "fbx";
   scale: number;
   splitByTexture: boolean;
+  splitByAllDeclaredTextures: boolean;
+  organizeByModel?: "file-name" | "model-id";
   modelScale?: number;
   embedTextures: boolean;
   exportGroupsAsArmature: boolean;
@@ -28,6 +30,10 @@ Options:
   --scale, -s       Numeric scale applied to the model (default: 0.0625)
   --split-by-texture
                     Export each texture as a separate model file
+  --split-by-all-declared-textures, -a
+                    Export one file per declared texture, even if unused by faces
+  --organize-by-model
+                    Create a folder per bbmodel using file-name or model-id
   --model-scale     Model scale for glTF export
   --embed-textures  Embed textures in glTF (data URI when available)
   --export-groups-as-armature
@@ -47,6 +53,8 @@ function parseArgs(argv: string[]): CliOptions {
     ext: "obj",
     scale: 1 / 16,
     splitByTexture: false,
+    splitByAllDeclaredTextures: false,
+    organizeByModel: undefined,
     embedTextures: false,
     exportGroupsAsArmature: false,
     exportAnimations: false,
@@ -102,6 +110,21 @@ function parseArgs(argv: string[]): CliOptions {
       options.splitByTexture = true;
       continue;
     }
+    if (arg === "--split-by-all-declared-textures" || arg === "-a") {
+      options.splitByAllDeclaredTextures = true;
+      options.splitByTexture = true;
+      continue;
+    }
+    if (arg === "--organize-by-model") {
+      const modeValue = (argv[i + 1] ?? "").toLowerCase();
+      if (modeValue === "file-name" || modeValue === "model-id") {
+        options.organizeByModel = modeValue;
+      } else {
+        throw new Error("Invalid value for --organize-by-model. Use file-name or model-id.");
+      }
+      i += 1;
+      continue;
+    }
     if (arg === "--embed-textures") {
       options.embedTextures = true;
       continue;
@@ -138,6 +161,8 @@ function parseArgs(argv: string[]): CliOptions {
     ext: options.ext,
     scale: options.scale ?? 1 / 16,
     splitByTexture: Boolean(options.splitByTexture),
+    splitByAllDeclaredTextures: Boolean(options.splitByAllDeclaredTextures),
+    organizeByModel: options.organizeByModel,
     modelScale: options.modelScale,
     embedTextures: Boolean(options.embedTextures),
     exportGroupsAsArmature: Boolean(options.exportGroupsAsArmature),
@@ -156,6 +181,8 @@ async function main(): Promise<void> {
         outputExtension: options.ext,
         scale: options.scale,
         splitByTexture: options.splitByTexture,
+        splitByAllDeclaredTextures: options.splitByAllDeclaredTextures,
+        organizeByModel: options.organizeByModel,
         gltf: {
           modelScale: options.modelScale,
           embedTextures: options.embedTextures,
@@ -167,7 +194,8 @@ async function main(): Promise<void> {
     });
 
     if (converted.length === 0) {
-      console.log("No .bbmodel files found.");
+      console.log("No files were exported.");
+      console.log("Check your input path, filters/options, and use --overwrite if needed.");
       return;
     }
 

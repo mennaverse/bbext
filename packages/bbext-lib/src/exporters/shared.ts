@@ -59,18 +59,90 @@ export function decodeDataUri(dataUri: string): Uint8Array | null {
 
 export function resolveTextureMap(model: BBModel): Map<string, BBTexture> {
   const map = new Map<string, BBTexture>();
-  for (const texture of model.textures ?? []) {
-    if (texture.id) {
-      map.set(texture.id, texture);
+  const textures = model.textures ?? [];
+  for (const [index, texture] of textures.entries()) {
+    const canonical = getTextureCanonicalKey(texture, index, textures);
+    if (!map.has(canonical)) {
+      map.set(canonical, texture);
     }
-    if (texture.uuid) {
+
+    if (texture.id !== undefined && texture.id !== null) {
+      const idKey = String(texture.id);
+      if (!map.has(idKey)) {
+        map.set(idKey, texture);
+      }
+    }
+    if (texture.uuid && !map.has(texture.uuid)) {
       map.set(texture.uuid, texture);
     }
-    if (texture.name) {
+    if (texture.name && !map.has(texture.name)) {
       map.set(texture.name, texture);
+    }
+
+    const indexKey = String(index);
+    if (!map.has(indexKey)) {
+      map.set(indexKey, texture);
     }
   }
   return map;
+}
+
+function getNameCounts(textures: BBTexture[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const texture of textures) {
+    if (!texture.name) {
+      continue;
+    }
+    counts.set(texture.name, (counts.get(texture.name) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function getIdCounts(textures: BBTexture[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const texture of textures) {
+    if (texture.id === undefined || texture.id === null) {
+      continue;
+    }
+    const idKey = String(texture.id);
+    counts.set(idKey, (counts.get(idKey) ?? 0) + 1);
+  }
+  return counts;
+}
+
+export function getTextureCanonicalKey(texture: BBTexture, index: number, textures: BBTexture[]): string {
+  const nameCounts = getNameCounts(textures);
+  const idCounts = getIdCounts(textures);
+
+  if (texture.name && (nameCounts.get(texture.name) ?? 0) === 1) {
+    return texture.name;
+  }
+
+  if (texture.id !== undefined && texture.id !== null) {
+    const idKey = String(texture.id);
+    if ((idCounts.get(idKey) ?? 0) === 1) {
+      return idKey;
+    }
+  }
+
+  if (texture.uuid) {
+    return texture.uuid;
+  }
+
+  if (texture.name) {
+    return `${texture.name}_${index}`;
+  }
+
+  return `texture_${index}`;
+}
+
+export function collectDeclaredTextureKeys(model: BBModel): string[] {
+  const textures = model.textures ?? [];
+  const keys = new Set<string>();
+  for (const [index, texture] of textures.entries()) {
+    keys.add(getTextureCanonicalKey(texture, index, textures));
+  }
+  return [...keys];
 }
 
 function rotateUV(uvs: Vec2[], rotation: number): Vec2[] {
@@ -131,12 +203,46 @@ function normalizeUV(
   return [rotated[0], rotated[1], rotated[2], rotated[3]];
 }
 
-function resolveTextureKey(face: BBFace | undefined): string {
+function textureIdentity(texture: BBTexture | undefined, fallback: string): string {
+  if (!texture) {
+    return fallback;
+  }
+  return texture.name ?? String(texture.id ?? texture.uuid ?? fallback);
+}
+
+function resolveTextureKey(face: BBFace | undefined, model: BBModel): string {
   if (!face?.texture && face?.texture !== 0) {
     return "default";
   }
-  const value = String(face.texture);
-  return value.startsWith("#") ? value.slice(1) : value;
+
+  const textures = model.textures ?? [];
+  const textureMap = resolveTextureMap(model);
+
+  if (typeof face.texture === "number" && Number.isInteger(face.texture)) {
+    const texture = textures[face.texture];
+    return texture ? getTextureCanonicalKey(texture, face.texture, textures) : String(face.texture);
+  }
+
+  const rawValue = String(face.texture);
+  const normalizedValue = rawValue.startsWith("#") ? rawValue.slice(1) : rawValue;
+
+  if (/^\d+$/.test(normalizedValue)) {
+    const index = Number(normalizedValue);
+    const texture = textures[index];
+    if (texture) {
+      return getTextureCanonicalKey(texture, index, textures);
+    }
+  }
+
+  const resolved = textureMap.get(normalizedValue);
+  if (!resolved) {
+    return normalizedValue;
+  }
+  const index = textures.indexOf(resolved);
+  if (index >= 0) {
+    return getTextureCanonicalKey(resolved, index, textures);
+  }
+  return textureIdentity(resolved, normalizedValue);
 }
 
 export function buildFaceBatches(model: BBModel, sceneElements: SceneElement[], scale: number): FaceBatch[] {
@@ -146,6 +252,71 @@ export function buildFaceBatches(model: BBModel, sceneElements: SceneElement[], 
 
   for (const sceneElement of sceneElements) {
     const element = sceneElement.element;
+
+    const maybeMesh = element as unknown as {
+      type?: string;
+      vertices?: Record<string, [number, number, number]>;
+      faces?: Record<string, { vertices?: string[]; uv?: Record<string, [number, number]>; texture?: string | number }>;
+    };
+
+    if (maybeMesh.type === "mesh" && maybeMesh.vertices && maybeMesh.faces) {
+      for (const face of Object.values(maybeMesh.faces)) {
+        const vertexIds = Array.isArray(face.vertices) ? face.vertices : [];
+        if (vertexIds.length < 3) {
+          continue;
+        }
+
+        const textureKey = resolveTextureKey({ texture: face.texture }, model);
+        const materialName = materialFromTextureKey(textureKey);
+
+        const worldPositions = vertexIds.map((vertexId) => {
+          const vertex = maybeMesh.vertices?.[vertexId];
+          if (!vertex || vertex.length < 3) {
+            return null;
+          }
+          const world = applyTransforms([vertex[0], vertex[1], vertex[2]], sceneElement.transforms);
+          return scalePoint(world, scale);
+        });
+
+        if (worldPositions.some((position) => position === null)) {
+          continue;
+        }
+
+        const worldUvs = vertexIds.map((vertexId) => {
+          const uv = face.uv?.[vertexId];
+          if (!uv || uv.length < 2) {
+            return [0, 0] as Vec2;
+          }
+          return [uv[0] / textureWidth, 1 - uv[1] / textureHeight] as Vec2;
+        });
+
+        // Triangulate n-gons using fan triangulation.
+        for (let i = 1; i < vertexIds.length - 1; i += 1) {
+          const p0 = worldPositions[0] as Vec3;
+          const p1 = worldPositions[i] as Vec3;
+          const p2 = worldPositions[i + 1] as Vec3;
+
+          const uv0 = worldUvs[0];
+          const uv1 = worldUvs[i];
+          const uv2 = worldUvs[i + 1];
+
+          // Keep 4-vertex batch contract by repeating the 3rd vertex.
+          batches.push({
+            materialName,
+            textureKey,
+            positions: [p0, p1, p2, p2],
+            uvs: [uv0, uv1, uv2, uv2],
+          });
+        }
+      }
+      continue;
+    }
+
+    // Some bbmodel elements are not cuboids and do not provide from/to.
+    if (!Array.isArray(element.from) || element.from.length < 3 || !Array.isArray(element.to) || element.to.length < 3) {
+      continue;
+    }
+
     const from: Vec3 = [element.from[0], element.from[1], element.from[2]];
     const to: Vec3 = [element.to[0], element.to[1], element.to[2]];
     const faces = faceCorners(from, to);
@@ -168,7 +339,7 @@ export function buildFaceBatches(model: BBModel, sceneElements: SceneElement[], 
         return scalePoint(world, scale);
       }) as [Vec3, Vec3, Vec3, Vec3];
 
-      const textureKey = resolveTextureKey(bbFace);
+      const textureKey = resolveTextureKey(bbFace, model);
       const materialName = materialFromTextureKey(textureKey);
 
       batches.push({
@@ -273,20 +444,22 @@ export async function writeTextureFolder(
   }
 
   for (const texture of model.textures ?? []) {
-    if (!texture.path || texture.source?.startsWith("data:")) {
+    const texturePath = texture.path ?? texture.relative_path;
+    if (!texturePath || texture.source?.startsWith("data:")) {
       continue;
     }
 
-    const textureKey = texture.id ?? texture.uuid ?? texture.name;
-    if (!textureKey || !textureMap.has(textureKey)) {
+    const textureIndex = (model.textures ?? []).indexOf(texture);
+    const textureKey = getTextureCanonicalKey(texture, textureIndex, model.textures ?? []);
+    if (!textureMap.has(textureKey)) {
       continue;
     }
     if (allowedTextureKeys && !allowedTextureKeys.has(textureKey)) {
       continue;
     }
 
-    const sourceTexturePath = resolve(sourceFilePath, "..", texture.path);
-    const targetName = `${sanitizeMaterialName(textureKey)}${extname(texture.path) || ".png"}`;
+    const sourceTexturePath = resolve(sourceFilePath, "..", texturePath);
+    const targetName = `${sanitizeMaterialName(textureKey)}${extname(texturePath) || ".png"}`;
     const targetPath = join(textureFolder, targetName);
 
     try {

@@ -2,11 +2,12 @@ export type Vec3 = [number, number, number];
 export type Vec2 = [number, number];
 
 export interface BBTexture {
-  id?: string;
+  id?: string | number;
   uuid?: string;
   name?: string;
   source?: string;
   path?: string;
+  relative_path?: string;
 }
 
 export interface BBFace {
@@ -65,11 +66,21 @@ export interface BBAnimation {
 }
 
 export interface BBModel {
+  id?: string;
+  identifier?: string;
+  model_identifier?: string;
+  geometry_name?: string;
   name?: string;
+  meta?: {
+    model_format?: string;
+    format_version?: string;
+    box_uv?: boolean;
+  };
   resolution?: {
     width?: number;
     height?: number;
   };
+  cubes?: BBElement[];
   textures?: BBTexture[];
   elements?: BBElement[];
   outliner?: BBOutlinerNode[];
@@ -94,6 +105,8 @@ export interface ExportOptions {
   scale: number;
   overwrite: boolean;
   splitByTexture?: boolean;
+  splitByAllDeclaredTextures?: boolean;
+  organizeByModel?: "file-name" | "model-id";
   gltf?: {
     modelScale?: number;
     embedTextures?: boolean;
