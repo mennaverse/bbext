@@ -1,0 +1,19 @@
+{
+  "name": "@bbext/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "bbext": "dist/bbext"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "build": "bun build src/cli.ts --target bun --outfile dist/bbext --compile"
+  },
+  "dependencies": {
+    "@bbext/lib": "workspace:*"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "bbext",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run --cwd apps/bbext-cli build",
+    "dev": "bun run --cwd apps/bbext-cli dev"
+  }
+}

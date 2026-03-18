@@ -1,2 +1,91 @@
 # bbext
-Blockbench .bbmodel exporter, export all your models at once to *.gltf, *.fbx, etc
+
+A Bun + TypeScript CLI for recursively exporting `.bbmodel` files to 3D output formats.
+
+Currently supported output formats:
+
+- `.obj` (with `.mtl` and extracted textures when available)
+- `.gltf` (with `.bin` and textures in a companion folder)
+- `.fbx` (ASCII FBX focused on geometry and UVs)
+
+## Structure
+
+- `apps/bbext-cli`: command-line application
+- `packages/bbext-lib`: reading and export library
+
+## Requirements
+
+- Bun 1.x
+
+## Install dependencies
+
+```bash
+bun install
+```
+
+## Run in dev mode
+
+```bash
+bun run dev --cwd apps/bbext-cli -- --help
+```
+
+## Build the CLI with Bun
+
+Generates a compiled binary at `apps/bbext-cli/dist/bbext`:
+
+```bash
+bun run build
+```
+
+Or directly from the CLI package:
+
+```bash
+bun run --cwd apps/bbext-cli build
+```
+
+## Usage
+
+```bash
+bbext --input <file-or-folder> --output <destination-folder> [options]
+```
+
+Options:
+
+- `--input, -i`: `.bbmodel` file or folder for recursive scanning
+- `--output, -o`: output folder
+- `--ext, -e`: export extension (`obj`, `gltf`, `fbx`)
+- `--scale, -s`: applied scale (default `0.0625`)
+- `--split-by-texture`: export each texture as a separate model file
+- `--model-scale`: model scale for glTF
+- `--embed-textures`: embed textures in glTF when available
+- `--export-groups-as-armature`: export outliner groups as an armature in glTF
+- `--export-animations`: export animations to glTF
+- `--overwrite`: overwrite existing files
+
+Example:
+
+```bash
+bbext -i ./models -o ./exports -e obj --scale 0.0625 --overwrite
+```
+
+glTF example with Blockbench-style options:
+
+```bash
+bbext -i ./models -o ./exports -e gltf --model-scale 0.0625 --embed-textures --export-groups-as-armature --export-animations --overwrite
+```
+
+Split one `.bbmodel` into one output file per texture:
+
+```bash
+bbext -i ./models -o ./exports -e obj --split-by-texture --overwrite
+```
+
+When `--split-by-texture` is enabled, output files receive a texture suffix such as `character__skin.obj` or `character__metal.gltf`.
+
+## Export flow
+
+1. Finds all `.bbmodel` files under the input path recursively.
+2. Preserves the folder hierarchy in the output.
+3. Converts each model to the requested output format.
+4. Generates companion files when required, such as `.mtl` or `.bin`.
+5. Extracts embedded textures and copies external textures when needed.
