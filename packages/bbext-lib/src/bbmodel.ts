@@ -40,6 +40,7 @@ export async function loadBBModel(filePath: string): Promise<BBModel> {
 function collectElementsFromOutliner(
   nodes: BBOutlinerNode[],
   byUuid: Map<string, BBElement>,
+  groupsByUuid: Map<string, BBOutlinerNode>,
   inheritedTransforms: Transform[],
   groupPath: string[],
   out: SceneElement[],
@@ -66,29 +67,40 @@ function collectElementsFromOutliner(
       continue;
     }
 
-    const groupNode = node;
-    const children = Array.isArray(node.children) ? node.children : [];
-    const groupName = groupNode.name ?? "group";
+    const groupNode = (typeof node !== "string" && node.uuid ? groupsByUuid.get(node.uuid) : undefined) as Exclude<BBOutlinerNode, string> | undefined;
+    const resolvedGroup = groupNode && typeof groupNode !== "string" ? groupNode : node;
+    const children = Array.isArray(node.children)
+      ? node.children
+      : Array.isArray(resolvedGroup.children)
+        ? resolvedGroup.children
+        : [];
+    const groupName = resolvedGroup.name ?? "group";
     const nextGroupPath = [...groupPath, groupName];
-    const groupRotation = toVec3(groupNode.rotation, [0, 0, 0]);
-    const groupOrigin = toVec3(groupNode.origin, [0, 0, 0]);
+    const groupRotation = toVec3(resolvedGroup.rotation, [0, 0, 0]);
+    const groupOrigin = toVec3(resolvedGroup.origin, [0, 0, 0]);
 
     let groupTransforms = inheritedTransforms;
     if (groupRotation.some((value) => value !== 0)) {
       groupTransforms = [...inheritedTransforms, { origin: groupOrigin, rotation: groupRotation }];
     }
 
-    collectElementsFromOutliner(children, byUuid, groupTransforms, nextGroupPath, out);
+    collectElementsFromOutliner(children, byUuid, groupsByUuid, groupTransforms, nextGroupPath, out);
   }
 }
 
 export function buildSceneElements(model: BBModel): SceneElement[] {
   const elements = Array.isArray(model.elements) ? model.elements : [];
   const byUuid = new Map<string, BBElement>();
+  const groupsByUuid = new Map<string, BBOutlinerNode>();
 
   for (const element of elements) {
     if (element.uuid) {
       byUuid.set(element.uuid, element);
+    }
+  }
+  for (const group of model.groups ?? []) {
+    if (group.uuid) {
+      groupsByUuid.set(group.uuid, group);
     }
   }
 
@@ -96,7 +108,7 @@ export function buildSceneElements(model: BBModel): SceneElement[] {
   const outliner = Array.isArray(model.outliner) ? model.outliner : [];
 
   if (outliner.length > 0 && byUuid.size > 0) {
-    collectElementsFromOutliner(outliner, byUuid, [], [], sceneElements);
+    collectElementsFromOutliner(outliner, byUuid, groupsByUuid, [], [], sceneElements);
     return sceneElements;
   }
 

@@ -6,7 +6,7 @@ import { convertBBModelsRecursively } from "@bbext/lib";
 interface CliOptions {
   inputPath: string;
   outputPath: string;
-  ext: "obj" | "gltf" | "fbx";
+  ext: "obj" | "gltf" | "gltf-three" | "fbx";
   scale: number;
   splitByTexture: boolean;
   splitByAllDeclaredTextures: boolean;
@@ -26,7 +26,7 @@ Usage:
 Options:
   --input, -i       .bbmodel file or root folder for recursive scanning
   --output, -o      Output folder
-  --ext, -e         3D object extension (obj, gltf, fbx)
+  --ext, -e         3D object extension (obj, gltf, gltf-three, fbx)
   --scale, -s       Numeric scale applied to the model (default: 0.0625)
   --split-by-texture
                     Export each texture as a separate model file
@@ -80,7 +80,7 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === "--ext" || arg === "-e") {
       const extValue = (argv[i + 1] ?? "").toLowerCase();
-      if (extValue === "obj" || extValue === "gltf" || extValue === "fbx") {
+      if (extValue === "obj" || extValue === "gltf" || extValue === "gltf-three" || extValue === "fbx") {
         options.ext = extValue;
       } else {
         options.ext = undefined;
@@ -151,8 +151,8 @@ function parseArgs(argv: string[]): CliOptions {
   if (!options.outputPath) {
     throw new Error("Provide --output.");
   }
-  if (options.ext !== "obj" && options.ext !== "gltf" && options.ext !== "fbx") {
-    throw new Error(`Unsupported extension '${options.ext}'. Use --ext obj|gltf|fbx.`);
+  if (options.ext !== "obj" && options.ext !== "gltf" && options.ext !== "gltf-three" && options.ext !== "fbx") {
+    throw new Error(`Unsupported extension '${options.ext}'. Use --ext obj|gltf|gltf-three|fbx.`);
   }
 
   return {

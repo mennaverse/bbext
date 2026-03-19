@@ -2,6 +2,7 @@ import { access } from "node:fs/promises";
 import { basename, dirname, extname, relative, resolve } from "node:path";
 import { buildSceneElements, loadBBModel } from "./bbmodel";
 import { writeFbxOutput, generateFbxData } from "./exporters/fbx";
+import { generateGltfThreeData, writeGltfThreeOutput } from "./exporters/gltf-three";
 import { generateGltfData, writeGltfOutput } from "./exporters/gltf";
 import { generateObjData, writeObjOutput } from "./exporters/obj";
 import {
@@ -65,7 +66,10 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
   for (const source of bbmodels) {
     const model = await loadBBModel(source);
     const baseDestination = outputPathFromSource(source, inputRoot, outputRoot, model, request.options);
-    const destination = baseDestination.replace(/\.converted$/i, `.${request.options.outputExtension}`);
+    const outputFileExtension = request.options.outputExtension === "gltf-three"
+      ? "gltf"
+      : request.options.outputExtension;
+    const destination = baseDestination.replace(/\.converted$/i, `.${outputFileExtension}`);
     const sceneElements = buildSceneElements(model);
     const faceBatches = buildFaceBatches(model, sceneElements, request.options.gltf?.modelScale ?? request.options.scale);
         const textureVariants = request.options.splitByTexture
@@ -112,6 +116,20 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
           selectedTextureKeys,
         );
         await writeGltfOutput(source, currentDestination, gltfData, model, selectedTextureKeys);
+      } else if (request.options.outputExtension === "gltf-three") {
+        const gltfData = await generateGltfThreeData(
+          source,
+          currentDestination,
+          model,
+          sceneElements,
+          request.options.scale,
+          {
+            modelScale: request.options.gltf?.modelScale,
+            embedTextures: request.options.gltf?.embedTextures,
+          },
+          selectedTextureKeys,
+        );
+        await writeGltfThreeOutput(currentDestination, gltfData);
       } else {
         const fbxData = generateFbxData(currentDestination, model, sceneElements, request.options.scale, selectedTextureKeys);
         await writeFbxOutput(currentDestination, fbxData);

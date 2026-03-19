@@ -8,7 +8,9 @@
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
-    "build": "bun build src/cli.ts --minify --target bun --outfile dist/bbext --compile"
+    "build": "bun run build:compile && bun run build:runtime-sharp",
+    "build:compile": "bun build src/cli.ts --minify --target bun --outfile dist/bbext --compile --compile-autoload-package-json --external sharp",
+    "build:runtime-sharp": "bun run scripts/embed-sharp-runtime.js"
   },
   "dependencies": {
     "@bbext/lib": "workspace:*"

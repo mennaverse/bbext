@@ -290,6 +290,37 @@ export function buildFaceBatches(model: BBModel, sceneElements: SceneElement[], 
           return [uv[0] / textureWidth, 1 - uv[1] / textureHeight] as Vec2;
         });
 
+        if (vertexIds.length === 4) {
+          batches.push({
+            materialName,
+            textureKey,
+            positions: [
+              worldPositions[0] as Vec3,
+              worldPositions[1] as Vec3,
+              worldPositions[2] as Vec3,
+              worldPositions[3] as Vec3,
+            ],
+            uvs: [worldUvs[0], worldUvs[1], worldUvs[2], worldUvs[3]],
+          });
+          continue;
+        }
+
+        if (vertexIds.length === 3) {
+          const p0 = worldPositions[0] as Vec3;
+          const p1 = worldPositions[1] as Vec3;
+          const p2 = worldPositions[2] as Vec3;
+          const uv0 = worldUvs[0];
+          const uv1 = worldUvs[1];
+          const uv2 = worldUvs[2];
+          batches.push({
+            materialName,
+            textureKey,
+            positions: [p0, p1, p2, p2],
+            uvs: [uv0, uv1, uv2, uv2],
+          });
+          continue;
+        }
+
         // Triangulate n-gons using fan triangulation.
         for (let i = 1; i < vertexIds.length - 1; i += 1) {
           const p0 = worldPositions[0] as Vec3;
@@ -300,7 +331,6 @@ export function buildFaceBatches(model: BBModel, sceneElements: SceneElement[], 
           const uv1 = worldUvs[i];
           const uv2 = worldUvs[i + 1];
 
-          // Keep 4-vertex batch contract by repeating the 3rd vertex.
           batches.push({
             materialName,
             textureKey,

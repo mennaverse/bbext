@@ -7,6 +7,12 @@
   "types": "src/index.ts",
   "private": true,
   "devDependencies": {
+    "@types/three": "^0.183.1",
     "bun-types": "latest"
+  },
+  "dependencies": {
+    "node-three-gltf": "^2.1.0",
+    "sharp": "^0.34.5",
+    "three": "^0.183.2"
   }
 }

@@ -46,6 +46,7 @@ export interface BBAnimationKeyframePoint {
 export interface BBAnimationKeyframe {
   channel?: "rotation" | "position" | "scale" | string;
   time?: number;
+  interpolation?: string;
   x?: number;
   y?: number;
   z?: number;
@@ -83,6 +84,7 @@ export interface BBModel {
   cubes?: BBElement[];
   textures?: BBTexture[];
   elements?: BBElement[];
+  groups?: BBGroup[];
   outliner?: BBOutlinerNode[];
   animations?: BBAnimation[];
 }
@@ -101,7 +103,7 @@ export interface Transform {
 }
 
 export interface ExportOptions {
-  outputExtension: "obj" | "gltf" | "fbx";
+  outputExtension: "obj" | "gltf" | "gltf-three" | "fbx";
   scale: number;
   overwrite: boolean;
   splitByTexture?: boolean;
