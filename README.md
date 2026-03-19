@@ -44,6 +44,20 @@ Or directly from the CLI package:
 bun run --cwd apps/bbext-cli build
 ```
 
+## Build a single .exe (alternative packager)
+
+If you need one standalone `.exe` that works from any `cwd`, use the pkg-based build:
+
+```bash
+bun run build:single
+```
+
+Output:
+
+- `apps/bbext-cli/dist/bbext-single.exe`
+
+This path keeps Bun for development and conversion code, but uses `pkg` only for final Windows single-file packaging.
+
 ## Usage
 
 ```bash

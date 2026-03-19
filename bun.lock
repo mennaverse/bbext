@@ -13,6 +13,8 @@
       },
       "dependencies": {
         "@bbext/lib": "workspace:*",
+        "@img/sharp-win32-x64": "^0.34.5",
+        "sharp": "^0.34.5",
       },
       "devDependencies": {
         "bun-types": "latest",
@@ -22,7 +24,6 @@
       "name": "@bbext/lib",
       "version": "0.1.0",
       "dependencies": {
-        "@img/sharp-win32-x64": "^0.34.5",
         "node-three-gltf": "^2.1.0",
         "sharp": "^0.34.5",
         "three": "^0.183.2",

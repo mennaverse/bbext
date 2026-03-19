@@ -8,12 +8,16 @@
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
-    "build": "bun run build:compile && bun run build:runtime-sharp",
-    "build:compile": "bun build src/cli.ts --minify --target bun --outfile dist/bbext --compile --compile-autoload-package-json --external sharp",
-    "build:runtime-sharp": "bun run scripts/embed-sharp-runtime.js"
+    "start": "bun run src/cli.ts",
+    "run": "bun run src/cli.ts",
+    "run:tsx": "tsx src/cli.ts",
+    "run:sea": "bun run src/cli-sea.ts",
+    "run:sea:tsx": "tsx src/cli-sea.ts"
   },
   "dependencies": {
-    "@bbext/lib": "workspace:*"
+    "@bbext/lib": "workspace:*",
+    "@img/sharp-win32-x64": "^0.34.5",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "bun-types": "latest"

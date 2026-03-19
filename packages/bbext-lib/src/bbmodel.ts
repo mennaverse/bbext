@@ -45,6 +45,31 @@ function collectElementsFromOutliner(
   groupPath: string[],
   out: SceneElement[],
 ): void {
+  function collectGroup(
+    groupNode: Exclude<BBOutlinerNode, string>,
+    inheritedGroupTransforms: Transform[],
+    inheritedGroupPath: string[],
+  ): void {
+    const resolvedByUuid = groupNode.uuid ? groupsByUuid.get(groupNode.uuid) : undefined;
+    const resolvedGroup = (resolvedByUuid && typeof resolvedByUuid !== "string") ? resolvedByUuid : groupNode;
+    const children = Array.isArray(groupNode.children)
+      ? groupNode.children
+      : Array.isArray(resolvedGroup.children)
+        ? resolvedGroup.children
+        : [];
+    const groupName = resolvedGroup.name ?? groupNode.name ?? "group";
+    const nextGroupPath = [...inheritedGroupPath, groupName];
+    const groupRotation = toVec3(resolvedGroup.rotation, [0, 0, 0]);
+    const groupOrigin = toVec3(resolvedGroup.origin, [0, 0, 0]);
+
+    let nextTransforms = inheritedGroupTransforms;
+    if (groupRotation.some((value) => value !== 0)) {
+      nextTransforms = [...inheritedGroupTransforms, { origin: groupOrigin, rotation: groupRotation }];
+    }
+
+    collectElementsFromOutliner(children, byUuid, groupsByUuid, nextTransforms, nextGroupPath, out);
+  }
+
   for (const node of nodes) {
     if (typeof node === "string") {
       const element = byUuid.get(node);
@@ -63,28 +88,17 @@ function collectElementsFromOutliner(
           transforms: elementTransforms,
           groupPath,
         });
+        continue;
+      }
+
+      const referencedGroup = groupsByUuid.get(node);
+      if (referencedGroup && typeof referencedGroup !== "string") {
+        collectGroup(referencedGroup, inheritedTransforms, groupPath);
       }
       continue;
     }
 
-    const groupNode = (typeof node !== "string" && node.uuid ? groupsByUuid.get(node.uuid) : undefined) as Exclude<BBOutlinerNode, string> | undefined;
-    const resolvedGroup = groupNode && typeof groupNode !== "string" ? groupNode : node;
-    const children = Array.isArray(node.children)
-      ? node.children
-      : Array.isArray(resolvedGroup.children)
-        ? resolvedGroup.children
-        : [];
-    const groupName = resolvedGroup.name ?? "group";
-    const nextGroupPath = [...groupPath, groupName];
-    const groupRotation = toVec3(resolvedGroup.rotation, [0, 0, 0]);
-    const groupOrigin = toVec3(resolvedGroup.origin, [0, 0, 0]);
-
-    let groupTransforms = inheritedTransforms;
-    if (groupRotation.some((value) => value !== 0)) {
-      groupTransforms = [...inheritedTransforms, { origin: groupOrigin, rotation: groupRotation }];
-    }
-
-    collectElementsFromOutliner(children, byUuid, groupsByUuid, groupTransforms, nextGroupPath, out);
+    collectGroup(node, inheritedTransforms, groupPath);
   }
 }
 
@@ -109,7 +123,9 @@ export function buildSceneElements(model: BBModel): SceneElement[] {
 
   if (outliner.length > 0 && byUuid.size > 0) {
     collectElementsFromOutliner(outliner, byUuid, groupsByUuid, [], [], sceneElements);
-    return sceneElements;
+    if (sceneElements.length > 0) {
+      return sceneElements;
+    }
   }
 
   // Fallback for models without outliner linkage.

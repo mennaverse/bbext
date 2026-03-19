@@ -131,7 +131,7 @@ export async function generateGltfThreeData(
   }
 
   const scene = new Scene();
-  scene.name = modelName;
+  scene.name = "blockbench_export";
 
   for (const [materialName, buffers] of byMaterial) {
     if (buffers.positions.length === 0 || buffers.indices.length === 0) {
@@ -171,7 +171,9 @@ export async function generateGltfThreeData(
     binary: false,
     embedImages: embedTextures,
     onlyVisible: false,
-    trs: false,
+    trs: true,
+    truncateDrawRange: false,
+    forceIndices: false,
   });
 
   return {

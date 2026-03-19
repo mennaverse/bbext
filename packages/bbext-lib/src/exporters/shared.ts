@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import type {
   BBFace,
@@ -470,7 +470,7 @@ export async function writeTextureFolder(
     ) {
       continue;
     }
-    await Bun.write(join(textureFolder, texture.name), texture.bytes);
+    await writeFile(join(textureFolder, texture.name), texture.bytes);
   }
 
   for (const texture of model.textures ?? []) {

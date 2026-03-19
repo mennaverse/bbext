@@ -7,6 +7,10 @@
   ],
   "scripts": {
     "build": "bun run --cwd apps/bbext-cli build",
-    "dev": "bun run --cwd apps/bbext-cli dev"
+    "dev": "bun run --cwd apps/bbext-cli dev",
+    "start": "bun run --cwd apps/bbext-cli start",
+    "run": "bun run --cwd apps/bbext-cli run",
+    "run:tsx": "bun run --cwd apps/bbext-cli run:tsx",
+    "build:single": "bun run --cwd apps/bbext-cli build:single"
   }
 }

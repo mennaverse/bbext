@@ -946,6 +946,17 @@ export function generateGltfData(
         jointNodeIndices,
       });
     }
+
+    // Fallback for models without outliner group hierarchy: still emit mesh geometry.
+    if (meshInputs.length === 0) {
+      meshInputs.push({
+        nodeName: modelName,
+        meshName: modelName,
+        rootPath: [],
+        entries: [{ faceBatches: allFaceBatches, jointIndex: 0 }],
+        jointNodeIndices: [],
+      });
+    }
   } else if (useGroupHierarchy) {
     for (const [index, sceneElement] of sceneElements.entries()) {
       const batches = filterFaceBatches(buildFaceBatches(model, [sceneElement], finalScale), { textureKeys });
@@ -1297,7 +1308,7 @@ export async function writeGltfOutput(
 
   await writeFile(destinationGltfPath, data.gltf, "utf8");
   if (data.bin !== null) {
-    await Bun.write(join(destinationDir, `${modelName}.bin`), data.bin);
+    await writeFile(join(destinationDir, `${modelName}.bin`), data.bin);
   }
   if (data.shouldWriteExternalTextures) {
     await writeTextureFolder(sourceFilePath, destinationDir, modelName, model, data.embeddedTextures, textureKeys);
