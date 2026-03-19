@@ -42,7 +42,7 @@ export interface GltfExportOptions {
 }
 
 const GLTF_ANIMATION_SAMPLE_RATE = 24;
-const GLTF_ANIMATION_MAX_SAMPLES = 16;
+const GLTF_ANIMATION_MAX_SAMPLES = 64;
 const SAMPLE_EPSILON = 1e-5;
 
 function computePositionMinMax(positions: number[]): { min: [number, number, number]; max: [number, number, number] } {
@@ -111,23 +111,41 @@ function concatUint8(chunks: Uint8Array[]): Uint8Array {
 }
 
 function degreesToQuatXYZ(deg: Vec3): [number, number, number, number] {
+  // Match Blockbench/glTF orientation by composing rotations as Z * Y * X.
   const x = (deg[0] * Math.PI) / 180;
   const y = (deg[1] * Math.PI) / 180;
   const z = (deg[2] * Math.PI) / 180;
 
-  const cx = Math.cos(x / 2);
   const sx = Math.sin(x / 2);
-  const cy = Math.cos(y / 2);
+  const cx = Math.cos(x / 2);
   const sy = Math.sin(y / 2);
-  const cz = Math.cos(z / 2);
+  const cy = Math.cos(y / 2);
   const sz = Math.sin(z / 2);
+  const cz = Math.cos(z / 2);
 
-  return [
-    sx * cy * cz + cx * sy * sz,
-    cx * sy * cz - sx * cy * sz,
-    cx * cy * sz + sx * sy * cz,
-    cx * cy * cz - sx * sy * sz,
+  // q = qz * qy * qx
+  const qx: [number, number, number, number] = [sx, 0, 0, cx];
+  const qy: [number, number, number, number] = [0, sy, 0, cy];
+  const qz: [number, number, number, number] = [0, 0, sz, cz];
+
+  const multiply = (
+    a: [number, number, number, number],
+    b: [number, number, number, number],
+  ): [number, number, number, number] => [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
   ];
+
+  const q = multiply(multiply(qz, qy), qx);
+  const length = Math.hypot(q[0], q[1], q[2], q[3]);
+  if (length <= SAMPLE_EPSILON) {
+    return [0, 0, 0, 1];
+  }
+
+  const clean = (value: number): number => (Object.is(value, -0) ? 0 : value);
+  return [clean(q[0] / length), clean(q[1] / length), clean(q[2] / length), clean(q[3] / length)];
 }
 
 function keyframeVec3(keyframe: BBAnimationKeyframe, fallback: Vec3): Vec3 {
@@ -156,6 +174,159 @@ function quatEquals(a: [number, number, number, number], b: [number, number, num
     && Math.abs(a[1] - b[1]) <= epsilon
     && Math.abs(a[2] - b[2]) <= epsilon
     && Math.abs(a[3] - b[3]) <= epsilon;
+}
+
+function normalizeQuat(quat: [number, number, number, number]): [number, number, number, number] {
+  const length = Math.hypot(quat[0], quat[1], quat[2], quat[3]);
+  if (length <= SAMPLE_EPSILON) {
+    return [0, 0, 0, 1];
+  }
+
+  return [quat[0] / length, quat[1] / length, quat[2] / length, quat[3] / length];
+}
+
+function slerpQuat(
+  a: [number, number, number, number],
+  b: [number, number, number, number],
+  t: number,
+): [number, number, number, number] {
+  let q1 = normalizeQuat(a);
+  let q2 = normalizeQuat(b);
+
+  let dot = q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3];
+  if (dot < 0) {
+    dot = -dot;
+    q2 = [-q2[0], -q2[1], -q2[2], -q2[3]];
+  }
+
+  if (dot > 0.9995) {
+    return normalizeQuat([
+      lerp(q1[0], q2[0], t),
+      lerp(q1[1], q2[1], t),
+      lerp(q1[2], q2[2], t),
+      lerp(q1[3], q2[3], t),
+    ]);
+  }
+
+  const theta0 = Math.acos(Math.min(Math.max(dot, -1), 1));
+  const sinTheta0 = Math.sin(theta0);
+  if (Math.abs(sinTheta0) <= SAMPLE_EPSILON) {
+    return q1;
+  }
+
+  const theta = theta0 * t;
+  const sinTheta = Math.sin(theta);
+  const s0 = Math.cos(theta) - dot * sinTheta / sinTheta0;
+  const s1 = sinTheta / sinTheta0;
+
+  return [
+    q1[0] * s0 + q2[0] * s1,
+    q1[1] * s0 + q2[1] * s1,
+    q1[2] * s0 + q2[2] * s1,
+    q1[3] * s0 + q2[3] * s1,
+  ];
+}
+
+function quatAngularError(a: [number, number, number, number], b: [number, number, number, number]): number {
+  const q1 = normalizeQuat(a);
+  const q2 = normalizeQuat(b);
+  const dot = Math.min(Math.max(Math.abs(q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3]), -1), 1);
+  return 2 * Math.acos(dot);
+}
+
+function simplifySampledQuat(
+  samples: Array<{ time: number; value: [number, number, number, number] }>,
+  lockedTimes: Set<number>,
+  maxCount: number,
+): Array<{ time: number; value: [number, number, number, number] }> {
+  if (samples.length <= maxCount) {
+    return samples;
+  }
+
+  const mandatory = samples.map((sample, index) => index === 0 || index === samples.length - 1 || lockedTimes.has(sample.time));
+  const mandatoryCount = mandatory.reduce((count, value) => count + (value ? 1 : 0), 0);
+  const targetCount = Math.max(mandatoryCount, maxCount);
+  if (targetCount >= samples.length) {
+    return samples;
+  }
+
+  const skipCost: number[][] = Array.from({ length: samples.length }, () => Array(samples.length).fill(Number.POSITIVE_INFINITY));
+  for (let start = 0; start < samples.length; start += 1) {
+    skipCost[start][start] = 0;
+    for (let end = start + 1; end < samples.length; end += 1) {
+      let hasMandatoryInterior = false;
+      for (let middle = start + 1; middle < end; middle += 1) {
+        if (mandatory[middle]) {
+          hasMandatoryInterior = true;
+          break;
+        }
+      }
+      if (hasMandatoryInterior) {
+        continue;
+      }
+
+      const duration = samples[end].time - samples[start].time;
+      if (duration <= SAMPLE_EPSILON) {
+        skipCost[start][end] = 0;
+        continue;
+      }
+
+      let error = 0;
+      for (let middle = start + 1; middle < end; middle += 1) {
+        const t = (samples[middle].time - samples[start].time) / duration;
+        const approximated = slerpQuat(samples[start].value, samples[end].value, t);
+        const angularError = quatAngularError(samples[middle].value, approximated);
+        error += angularError * angularError;
+      }
+      skipCost[start][end] = error;
+    }
+  }
+
+  const dp: number[][] = Array.from({ length: targetCount + 1 }, () => Array(samples.length).fill(Number.POSITIVE_INFINITY));
+  const previousIndex: number[][] = Array.from({ length: targetCount + 1 }, () => Array(samples.length).fill(-1));
+  dp[1][0] = 0;
+
+  for (let kept = 2; kept <= targetCount; kept += 1) {
+    for (let end = 1; end < samples.length; end += 1) {
+      for (let start = kept - 2; start < end; start += 1) {
+        if (!Number.isFinite(dp[kept - 1][start]) || !Number.isFinite(skipCost[start][end])) {
+          continue;
+        }
+
+        const candidate = dp[kept - 1][start] + skipCost[start][end];
+        if (candidate < dp[kept][end]) {
+          dp[kept][end] = candidate;
+          previousIndex[kept][end] = start;
+        }
+      }
+    }
+  }
+
+  let bestKept = -1;
+  let bestCost = Number.POSITIVE_INFINITY;
+  for (let kept = mandatoryCount; kept <= targetCount; kept += 1) {
+    const cost = dp[kept][samples.length - 1];
+    if (cost < bestCost) {
+      bestCost = cost;
+      bestKept = kept;
+    }
+  }
+
+  if (bestKept < 0) {
+    return samples;
+  }
+
+  const selectedIndices: number[] = [];
+  let currentKept = bestKept;
+  let currentIndex = samples.length - 1;
+  while (currentIndex >= 0 && currentKept > 0) {
+    selectedIndices.push(currentIndex);
+    currentIndex = previousIndex[currentKept][currentIndex];
+    currentKept -= 1;
+  }
+
+  selectedIndices.reverse();
+  return selectedIndices.map((index) => samples[index]);
 }
 
 function vec3IsZero(vec: Vec3, epsilon = SAMPLE_EPSILON): boolean {
@@ -273,11 +444,14 @@ function sampleTrackVec3(
   animation: BBAnimation,
   keyframes: BBAnimationKeyframe[],
   fallback: Vec3,
+  maxSamples: number = GLTF_ANIMATION_MAX_SAMPLES,
 ): Array<{ time: number; value: Vec3 }> {
   const sorted = [...keyframes].sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
   if (sorted.length === 0) {
     return [];
   }
+
+  const requiresSampling = trackNeedsSampling(sorted);
   if (!trackNeedsSampling(sorted)) {
     return sorted.map((keyframe) => ({
       time: Number(keyframe.time ?? 0),
@@ -368,10 +542,12 @@ function sampleTrackVec3(
 
   samples.sort((a, b) => a.time - b.time);
 
-  const lockedTimes = new Set(sorted.map((keyframe) => Number(keyframe.time ?? 0)));
-  const simplified = simplifySampledVec3(samples, lockedTimes, GLTF_ANIMATION_MAX_SAMPLES);
-  samples.length = 0;
-  samples.push(...simplified);
+  if (Number.isFinite(maxSamples) && maxSamples > 0 && samples.length > maxSamples) {
+    const lockedTimes = new Set(sorted.map((keyframe) => Number(keyframe.time ?? 0)));
+    const simplified = simplifySampledVec3(samples, lockedTimes, maxSamples);
+    samples.length = 0;
+    samples.push(...simplified);
+  }
 
   const lastKeyframe = sorted[sorted.length - 1];
   const lastTime = Number(lastKeyframe.time ?? 0);
@@ -387,14 +563,94 @@ function sampleRotationTrack(
   animation: BBAnimation,
   keyframes: BBAnimationKeyframe[],
 ): Array<{ time: number; value: [number, number, number, number] }> {
-  const sampled = sampleTrackVec3(animation, keyframes, [0, 0, 0]);
+  const sorted = [...keyframes].sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
+  if (sorted.length === 0) {
+    return [];
+  }
+  const requiresSampling = trackNeedsSampling(sorted);
+
+  const hasLargeDelta = (() => {
+    for (let i = 1; i < sorted.length; i += 1) {
+      const previous = keyframeVec3(sorted[i - 1], [0, 0, 0]);
+      const current = keyframeVec3(sorted[i], [0, 0, 0]);
+      if (
+        Math.abs(current[0] - previous[0]) > 180
+        || Math.abs(current[1] - previous[1]) > 180
+        || Math.abs(current[2] - previous[2]) > 180
+      ) {
+        return true;
+      }
+    }
+    return false;
+  })();
+
+  if (hasLargeDelta && !requiresSampling) {
+    const eulerSamples: Array<{ time: number; value: Vec3 }> = [];
+    for (let i = 0; i < sorted.length; i += 1) {
+      const current = sorted[i];
+      const currentTime = Number(current.time ?? 0);
+      const currentValue = keyframeVec3(current, [0, 0, 0]);
+
+      if (i === 0) {
+        eulerSamples.push({ time: currentTime, value: currentValue });
+        continue;
+      }
+
+      const previous = sorted[i - 1];
+      const previousTime = Number(previous.time ?? 0);
+      const previousValue = keyframeVec3(previous, [0, 0, 0]);
+      const delta: Vec3 = [
+        currentValue[0] - previousValue[0],
+        currentValue[1] - previousValue[1],
+        currentValue[2] - previousValue[2],
+      ];
+      const maxAbsDelta = Math.max(Math.abs(delta[0]), Math.abs(delta[1]), Math.abs(delta[2]));
+      const segmentSteps = Math.max(1, Math.ceil(maxAbsDelta / 180) + 1);
+
+      for (let step = 1; step <= segmentSteps; step += 1) {
+        const t = step / segmentSteps;
+        const sampleTime = lerp(previousTime, currentTime, t);
+        const sampleValue = lerpVec3(previousValue, currentValue, t);
+        eulerSamples.push({ time: sampleTime, value: sampleValue });
+      }
+    }
+
+    return eulerSamples.map((sample) => ({
+      time: sample.time,
+      value: degreesToQuatXYZ(sample.value),
+    }));
+  }
+
+  let requiresDenseSampling = requiresSampling;
+  for (let i = 1; i < sorted.length && !requiresDenseSampling; i += 1) {
+    const previous = keyframeVec3(sorted[i - 1], [0, 0, 0]);
+    const current = keyframeVec3(sorted[i], [0, 0, 0]);
+    if (
+      Math.abs(current[0] - previous[0]) > 180
+      || Math.abs(current[1] - previous[1]) > 180
+      || Math.abs(current[2] - previous[2]) > 180
+    ) {
+      requiresDenseSampling = true;
+    }
+  }
+
+  const samplingKeyframes = requiresDenseSampling && sorted.length > 0 && !trackNeedsSampling(sorted)
+    ? sorted.map((keyframe, index) => (index === 0 ? { ...keyframe, interpolation: "bezier" } : keyframe))
+    : keyframes;
+
+  const sampled = sampleTrackVec3(animation, samplingKeyframes, [0, 0, 0], Number.POSITIVE_INFINITY);
   const quats = sampled.map((sample) => ({
     time: sample.time,
     value: degreesToQuatXYZ(sample.value),
   }));
 
+  const lockedTimes = new Set(sorted.map((keyframe) => Number(keyframe.time ?? 0)));
+  const simplifiedQuats = Number.isFinite(GLTF_ANIMATION_MAX_SAMPLES) && GLTF_ANIMATION_MAX_SAMPLES > 0
+    ? simplifySampledQuat(quats, lockedTimes, GLTF_ANIMATION_MAX_SAMPLES)
+    : quats;
+
   const deduped: Array<{ time: number; value: [number, number, number, number] }> = [];
-  for (const sample of quats) {
+  for (const sample of simplifiedQuats) {
     const last = deduped[deduped.length - 1];
     if (!last || Math.abs(last.time - sample.time) > SAMPLE_EPSILON || !quatEquals(last.value, sample.value)) {
       deduped.push(sample);
@@ -407,6 +663,7 @@ interface GroupNodeInfo {
   nameToNode: Map<string, number>;
   pathToGroup: Map<string, BBGroup>;
   pathToNode: Map<string, number>;
+  pathVisitOrder: Map<string, number>;
   uuidToNode: Map<string, number>;
   bindMatrixByNode: Map<number, number[]>;
   rootGroupNodes: number[];
@@ -511,10 +768,12 @@ function buildGroupNodes(
   const nameToNode = new Map<string, number>();
   const pathToGroup = new Map<string, BBGroup>();
   const pathToNode = new Map<string, number>();
+  const pathVisitOrder = new Map<string, number>();
   const uuidToNode = new Map<string, number>();
   const bindMatrixByNode = new Map<number, number[]>();
   const rootGroupNodes: number[] = [];
   const groupLookup = getGroupLookup(model);
+  let visitCounter = 0;
 
   function visitItem(
     item: BBOutlinerNode,
@@ -529,6 +788,10 @@ function buildGroupNodes(
     const resolved = item.uuid ? groupLookup.get(item.uuid) ?? item : item;
     const nodeName = resolved.name ?? item.name ?? "root";
     const nodePath = [...path, nodeName].join("/");
+    if (!pathVisitOrder.has(nodePath)) {
+      pathVisitOrder.set(nodePath, visitCounter);
+      visitCounter += 1;
+    }
     const localTranslation = parentGroup
       ? translationBetween(parentGroup.origin, resolved.origin, scale)
       : [0, 0, 0] as Vec3;
@@ -588,6 +851,7 @@ function buildGroupNodes(
     nameToNode,
     pathToGroup,
     pathToNode,
+    pathVisitOrder,
     uuidToNode,
     bindMatrixByNode,
     rootGroupNodes,
@@ -732,12 +996,21 @@ export function generateGltfData(
   ): number {
     const viewIndex = appendBytes(bytes, target);
     const accessorIndex = accessors.length;
+    const normalizeBounds = (values?: number[]): number[] | undefined => {
+      if (!values) {
+        return values;
+      }
+      if (componentType !== 5126) {
+        return values;
+      }
+      return values.map((value) => Math.fround(value));
+    };
     accessors.push({
       bufferView: viewIndex,
       componentType,
       count,
-      max,
-      min,
+      max: normalizeBounds(max),
+      min: normalizeBounds(min),
       type,
     });
     return accessorIndex;
@@ -801,6 +1074,7 @@ export function generateGltfData(
 
   function buildMeshEntry(
     entries: Array<{ faceBatches: FaceBatch[]; jointIndex: number }>,
+    includeSkinAttributes: boolean,
     positionOffset: Vec3 = [0, 0, 0],
   ): { primitives: Array<Record<string, unknown>> } | null {
     if (entries.length === 0) {
@@ -818,13 +1092,16 @@ export function generateGltfData(
 
     for (const entry of orderedEntries) {
       for (const face of entry.faceBatches) {
+        if (face.positions.length < 3 || face.uvs.length !== face.positions.length) {
+          continue;
+        }
+
         const baseVertex = positions.length / 3;
-        const appliedOffset = entry.jointIndex === 0 ? positionOffset : [0, 0, 0];
         for (const p of face.positions) {
-          positions.push(p[0] - appliedOffset[0], p[1] - appliedOffset[1], p[2] - appliedOffset[2]);
+          positions.push(p[0] - positionOffset[0], p[1] - positionOffset[1], p[2] - positionOffset[2]);
         }
         const n = computeNormal(face.positions[0], face.positions[1], face.positions[2]);
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < face.positions.length; i++) {
           normals.push(n[0], n[1], n[2]);
           joints.push(0, entry.jointIndex, 0, 0);
           weights.push(0, 1, 0, 0);
@@ -846,10 +1123,15 @@ export function generateGltfData(
           baseVertex,
           baseVertex + 1,
           baseVertex + 2,
-          baseVertex,
-          baseVertex + 2,
-          baseVertex + 3,
         );
+
+        if (face.positions.length === 4) {
+          primitive.indices.push(
+            baseVertex,
+            baseVertex + 2,
+            baseVertex + 3,
+          );
+        }
       }
     }
 
@@ -857,6 +1139,19 @@ export function generateGltfData(
     if (vertexCount === 0) {
       return null;
     }
+
+    const uvMinMax = uvs.length > 0
+      ? {
+        min: [
+          Math.min(...uvs.filter((_, index) => index % 2 === 0)),
+          Math.min(...uvs.filter((_, index) => index % 2 === 1)),
+        ],
+        max: [
+          Math.max(...uvs.filter((_, index) => index % 2 === 0)),
+          Math.max(...uvs.filter((_, index) => index % 2 === 1)),
+        ],
+      }
+      : { min: [0, 0], max: [0, 0] };
 
     const minMax = computePositionMinMax(positions);
     const positionAccessorIndex = appendAccessor(
@@ -885,35 +1180,43 @@ export function generateGltfData(
       uvs.length / 2,
       "VEC2",
       34962,
-      [0, 0],
-      [Math.max(...uvs.filter((_, index) => index % 2 === 0)), Math.max(...uvs.filter((_, index) => index % 2 === 1))],
+      uvMinMax.min,
+      uvMinMax.max,
     );
 
-    const jointAccessorIndex = appendAccessor(
-      new Uint8Array(new Uint16Array(joints).buffer),
-      5123,
-      vertexCount,
-      "VEC4",
-      34962,
-      [0, Math.min(...joints.filter((_, index) => index % 4 === 1)), 0, 0],
-      [0, Math.max(...joints.filter((_, index) => index % 4 === 1)), 0, 0],
-    );
+    let jointAccessorIndex: number | undefined;
+    let weightAccessorIndex: number | undefined;
+    if (includeSkinAttributes) {
+      jointAccessorIndex = appendAccessor(
+        new Uint8Array(new Uint16Array(joints).buffer),
+        5123,
+        vertexCount,
+        "VEC4",
+        34962,
+        [0, Math.min(...joints.filter((_, index) => index % 4 === 1)), 0, 0],
+        [0, Math.max(...joints.filter((_, index) => index % 4 === 1)), 0, 0],
+      );
 
-    const weightAccessorIndex = appendAccessor(
-      new Uint8Array(new Float32Array(weights).buffer),
-      5126,
-      vertexCount,
-      "VEC4",
-      34962,
-      [0, 1, 0, 0],
-      [0, 1, 0, 0],
-    );
+      weightAccessorIndex = appendAccessor(
+        new Uint8Array(new Float32Array(weights).buffer),
+        5126,
+        vertexCount,
+        "VEC4",
+        34962,
+        [0, 1, 0, 0],
+        [0, 1, 0, 0],
+      );
+    }
 
     setBufferViewStride(positionAccessorIndex, 12);
     setBufferViewStride(normalAccessorIndex, 12);
     setBufferViewStride(uvAccessorIndex, 8);
-    setBufferViewStride(jointAccessorIndex, 8);
-    setBufferViewStride(weightAccessorIndex, 16);
+    if (jointAccessorIndex !== undefined) {
+      setBufferViewStride(jointAccessorIndex, 8);
+    }
+    if (weightAccessorIndex !== undefined) {
+      setBufferViewStride(weightAccessorIndex, 16);
+    }
 
     const useUint32 = vertexCount > 65535;
     const indexComponentType = useUint32 ? 5125 : 5123;
@@ -933,15 +1236,19 @@ export function generateGltfData(
           [maxIndex],
         );
 
+        const attributes: Record<string, number> = {
+          POSITION: positionAccessorIndex,
+          NORMAL: normalAccessorIndex,
+          TEXCOORD_0: uvAccessorIndex,
+        };
+        if (includeSkinAttributes && jointAccessorIndex !== undefined && weightAccessorIndex !== undefined) {
+          attributes.JOINTS_0 = jointAccessorIndex;
+          attributes.WEIGHTS_0 = weightAccessorIndex;
+        }
+
         return {
           mode: 4,
-          attributes: {
-            POSITION: positionAccessorIndex,
-            NORMAL: normalAccessorIndex,
-            TEXCOORD_0: uvAccessorIndex,
-            JOINTS_0: jointAccessorIndex,
-            WEIGHTS_0: weightAccessorIndex,
-          },
+          attributes,
           indices: indicesAccessor,
           material: materialIndexByName.get(primitive.materialName) ?? 0,
         };
@@ -968,11 +1275,9 @@ export function generateGltfData(
       const jointNodeIndices = [...groupNodes.pathToNode.entries()]
         .filter(([path]) => path === topLevelPath || path.startsWith(`${topLevelPath}/`))
         .sort(([pathA], [pathB]) => {
-          const depthDiff = pathA.split("/").length - pathB.split("/").length;
-          if (depthDiff !== 0) {
-            return depthDiff;
-          }
-          return pathA.localeCompare(pathB);
+          const orderA = groupNodes.pathVisitOrder.get(pathA) ?? Number.MAX_SAFE_INTEGER;
+          const orderB = groupNodes.pathVisitOrder.get(pathB) ?? Number.MAX_SAFE_INTEGER;
+          return orderA - orderB;
         })
         .map(([, nodeIndex]) => nodeIndex);
       const localJointIndexByNode = new Map(jointNodeIndices.map((nodeIndex, index) => [nodeIndex, index]));
@@ -1003,15 +1308,35 @@ export function generateGltfData(
       });
     }
 
-    // Fallback for models without outliner group hierarchy: still emit mesh geometry.
+    // Fallback for models without outliner group hierarchy: keep per-element meshes
+    // so mesh-origin translations are preserved (especially for small mesh parts).
     if (meshInputs.length === 0) {
-      meshInputs.push({
-        nodeName: modelName,
-        meshName: modelName,
-        rootPath: [],
-        entries: [{ faceBatches: allFaceBatches, jointIndex: 0 }],
-        jointNodeIndices: [],
-      });
+      for (const [index, sceneElement] of sceneElements.entries()) {
+        const batches = filterFaceBatches(buildFaceBatches(model, [sceneElement], finalScale), { textureKeys });
+        if (batches.length === 0) {
+          continue;
+        }
+
+        const meshName = sceneElement.element.name ?? `mesh_${index}`;
+        meshInputs.push({
+          nodeName: meshName,
+          meshName,
+          rootPath: [],
+          translation: meshElementNodeTranslation(sceneElement, finalScale),
+          entries: [{ faceBatches: batches, jointIndex: 0 }],
+          jointNodeIndices: [],
+        });
+      }
+
+      if (meshInputs.length === 0) {
+        meshInputs.push({
+          nodeName: modelName,
+          meshName: modelName,
+          rootPath: [],
+          entries: [{ faceBatches: allFaceBatches, jointIndex: 0 }],
+          jointNodeIndices: [],
+        });
+      }
     }
   } else if (useGroupHierarchy) {
     for (const [index, sceneElement] of sceneElements.entries()) {
@@ -1057,9 +1382,12 @@ export function generateGltfData(
   }
 
   for (const meshInput of meshInputs) {
+    const includeSkinAttributes = exportGroupsAsArmature && meshInput.jointNodeIndices.length > 0;
+    const positionOffset: Vec3 = includeSkinAttributes ? (meshInput.translation ?? [0, 0, 0]) : [0, 0, 0];
     const meshEntry = buildMeshEntry(
       meshInput.entries,
-      exportGroupsAsArmature ? (meshInput.translation ?? [0, 0, 0]) : [0, 0, 0],
+      includeSkinAttributes,
+      positionOffset,
     );
     if (!meshEntry) {
       continue;
@@ -1087,14 +1415,28 @@ export function generateGltfData(
           );
         }),
       );
+      const inverseBindMin = Array.from({ length: 16 }, (_, column) => {
+        let min = Number.POSITIVE_INFINITY;
+        for (let index = column; index < inverseBindMatrices.length; index += 16) {
+          min = Math.min(min, inverseBindMatrices[index]);
+        }
+        return min;
+      });
+      const inverseBindMax = Array.from({ length: 16 }, (_, column) => {
+        let max = Number.NEGATIVE_INFINITY;
+        for (let index = column; index < inverseBindMatrices.length; index += 16) {
+          max = Math.max(max, inverseBindMatrices[index]);
+        }
+        return max;
+      });
       const inverseBindAccessor = appendAccessor(
         new Uint8Array(inverseBindMatrices.buffer),
         5126,
         meshInput.jointNodeIndices.length,
         "MAT4",
         undefined,
-        Array.from(inverseBindMatrices.slice(0, 16)),
-        Array.from(inverseBindMatrices.slice(0, 16)),
+        inverseBindMin,
+        inverseBindMax,
       );
       meshSkinIndex = skins.length;
       skins.push({

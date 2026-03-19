@@ -24,8 +24,8 @@ export interface MaterialRef {
 export interface FaceBatch {
   materialName: string;
   textureKey: string;
-  positions: [Vec3, Vec3, Vec3, Vec3];
-  uvs: [Vec2, Vec2, Vec2, Vec2];
+  positions: Vec3[];
+  uvs: Vec2[];
 }
 
 export interface FaceBatchFilterOptions {
@@ -274,7 +274,15 @@ export function buildFaceBatches(model: BBModel, sceneElements: SceneElement[], 
           if (!vertex || vertex.length < 3) {
             return null;
           }
-          const world = applyTransforms([vertex[0], vertex[1], vertex[2]], sceneElement.transforms);
+          const meshOrigin = Array.isArray(element.origin) && element.origin.length >= 3
+            ? element.origin
+            : [0, 0, 0];
+          const localPosition: Vec3 = [
+            vertex[0] + meshOrigin[0],
+            vertex[1] + meshOrigin[1],
+            vertex[2] + meshOrigin[2],
+          ];
+          const world = applyTransforms(localPosition, sceneElement.transforms);
           return scalePoint(world, scale);
         });
 
@@ -315,8 +323,8 @@ export function buildFaceBatches(model: BBModel, sceneElements: SceneElement[], 
           batches.push({
             materialName,
             textureKey,
-            positions: [p0, p1, p2, p2],
-            uvs: [uv0, uv1, uv2, uv2],
+            positions: [p0, p1, p2],
+            uvs: [uv0, uv1, uv2],
           });
           continue;
         }
@@ -334,8 +342,8 @@ export function buildFaceBatches(model: BBModel, sceneElements: SceneElement[], 
           batches.push({
             materialName,
             textureKey,
-            positions: [p0, p1, p2, p2],
-            uvs: [uv0, uv1, uv2, uv2],
+            positions: [p0, p1, p2],
+            uvs: [uv0, uv1, uv2],
           });
         }
       }

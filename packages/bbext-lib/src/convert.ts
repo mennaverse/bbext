@@ -275,7 +275,6 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
         await writeGltfOutput(source, currentDestination, gltfData, variantModel, selectedTextureKeys);
       } else if (request.options.outputExtension === "gltf-three") {
         const gltfData = await generateGltfThreeData(
-          source,
           currentDestination,
           variantModel,
           variantSceneElements,
@@ -283,10 +282,12 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
           {
             modelScale: request.options.gltf?.modelScale,
             embedTextures: request.options.gltf?.embedTextures,
+            exportGroupsAsArmature: request.options.gltf?.exportGroupsAsArmature,
+            exportAnimations: request.options.gltf?.exportAnimations,
           },
           selectedTextureKeys,
         );
-        await writeGltfThreeOutput(currentDestination, gltfData);
+        await writeGltfThreeOutput(source, currentDestination, gltfData, variantModel, selectedTextureKeys);
       } else {
         const fbxData = generateFbxData(currentDestination, variantModel, variantSceneElements, request.options.scale, selectedTextureKeys);
         await writeFbxOutput(currentDestination, fbxData);

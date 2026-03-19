@@ -6,7 +6,7 @@ Currently supported output formats:
 
 - `.obj` (with `.mtl` and extracted textures when available)
 - `.gltf` (with `.bin` and textures in a companion folder)
-- `.gltf-three` (generated with Three.js `GLTFExporter` via `node-three-gltf`)
+- `.gltf-three` (same `.gltf` payload as the canonical exporter, kept as a compatibility target)
 - `.fbx` (ASCII FBX focused on geometry and UVs)
 
 ## Structure
@@ -66,10 +66,10 @@ glTF example with Blockbench-style options:
 bbext -i ./models -o ./exports -e gltf --model-scale 0.0625 --embed-textures --export-groups-as-armature --export-animations --overwrite
 ```
 
-glTF example using Three.js exporter (`node-three-gltf`):
+glTF example using the `gltf-three` compatibility target:
 
 ```bash
-bbext -i ./models -o ./exports -e gltf-three --model-scale 0.0625 --embed-textures --overwrite
+bbext -i ./models -o ./exports -e gltf-three --model-scale 0.0625 --embed-textures --export-groups-as-armature --export-animations --overwrite
 ```
 
 Split one `.bbmodel` into one output file per texture:
