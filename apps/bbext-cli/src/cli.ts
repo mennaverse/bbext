@@ -16,6 +16,8 @@ interface CliOptions {
   exportGroupsAsArmature: boolean;
   exportAnimations: boolean;
   overwrite: boolean;
+  cleanOutput: boolean;
+  cleanOutputGodot: boolean;
 }
 
 function printHelp(): void {
@@ -41,6 +43,9 @@ Options:
   --export-animations
                     Export animations present in the bbmodel to glTF
   --overwrite       Overwrite already converted files
+  --clean-output    Clear the destination folder before converting
+  --clean-output-godot
+                    Keep Godot .import files; clean only generated glTF artifacts
   --help, -h        Show this help
 
 Example:
@@ -59,6 +64,8 @@ function parseArgs(argv: string[]): CliOptions {
     exportGroupsAsArmature: false,
     exportAnimations: false,
     overwrite: false,
+    cleanOutput: false,
+    cleanOutputGodot: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -141,6 +148,14 @@ function parseArgs(argv: string[]): CliOptions {
       options.overwrite = true;
       continue;
     }
+    if (arg === "--clean-output") {
+      options.cleanOutput = true;
+      continue;
+    }
+    if (arg === "--clean-output-godot") {
+      options.cleanOutputGodot = true;
+      continue;
+    }
 
     throw new Error(`Unknown argument: ${arg}`);
   }
@@ -153,6 +168,9 @@ function parseArgs(argv: string[]): CliOptions {
   }
   if (options.ext !== "obj" && options.ext !== "gltf" && options.ext !== "gltf-three" && options.ext !== "fbx") {
     throw new Error(`Unsupported extension '${options.ext}'. Use --ext obj|gltf|gltf-three|fbx.`);
+  }
+  if (options.cleanOutput && options.cleanOutputGodot) {
+    throw new Error("Use either --clean-output or --clean-output-godot, not both.");
   }
 
   return {
@@ -168,6 +186,8 @@ function parseArgs(argv: string[]): CliOptions {
     exportGroupsAsArmature: Boolean(options.exportGroupsAsArmature),
     exportAnimations: Boolean(options.exportAnimations),
     overwrite: Boolean(options.overwrite),
+    cleanOutput: Boolean(options.cleanOutput),
+    cleanOutputGodot: Boolean(options.cleanOutputGodot),
   };
 }
 
@@ -190,6 +210,8 @@ async function main(): Promise<void> {
           exportAnimations: options.exportAnimations,
         },
         overwrite: options.overwrite,
+        cleanOutput: options.cleanOutput,
+        cleanOutputGodot: options.cleanOutputGodot,
       },
     });
 

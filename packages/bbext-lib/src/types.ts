@@ -106,6 +106,8 @@ export interface ExportOptions {
   outputExtension: "obj" | "gltf" | "gltf-three" | "fbx";
   scale: number;
   overwrite: boolean;
+  cleanOutput?: boolean;
+  cleanOutputGodot?: boolean;
   splitByTexture?: boolean;
   splitByAllDeclaredTextures?: boolean;
   organizeByModel?: "file-name" | "model-id";

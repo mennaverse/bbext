@@ -4,6 +4,7 @@ import type {
   BBAnimation,
   BBAnimationKeyframe,
   BBAnimationTrack,
+  BBElement,
   BBGroup,
   BBModel,
   BBOutlinerNode,
@@ -606,6 +607,61 @@ function normalizeTracks(animation: BBAnimation): Array<{ key: string; track: BB
   return entries;
 }
 
+function collectReachableNodeIndices(
+  nodes: Array<Record<string, unknown>>,
+  roots: number[],
+): Set<number> {
+  const reachable = new Set<number>();
+  const stack = [...roots];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined || reachable.has(current) || current < 0 || current >= nodes.length) {
+      continue;
+    }
+
+    reachable.add(current);
+    const node = nodes[current] as { children?: unknown };
+    if (!Array.isArray(node.children)) {
+      continue;
+    }
+
+    for (const child of node.children) {
+      if (typeof child === "number") {
+        stack.push(child);
+      }
+    }
+  }
+
+  return reachable;
+}
+
+function meshElementNodeTranslation(sceneElement: SceneElement, scale: number): Vec3 | undefined {
+  const meshCandidate = sceneElement.element as BBElement & {
+    type?: string;
+    vertices?: unknown;
+    faces?: unknown;
+  };
+  const isMeshElement = meshCandidate.type === "mesh"
+    || (typeof meshCandidate.vertices === "object" && meshCandidate.vertices !== null
+      && typeof meshCandidate.faces === "object" && meshCandidate.faces !== null);
+  if (!isMeshElement) {
+    return undefined;
+  }
+
+  const origin = sceneElement.element.origin;
+  if (!Array.isArray(origin) || origin.length < 3) {
+    return undefined;
+  }
+
+  const translation: Vec3 = [origin[0] * scale, origin[1] * scale, origin[2] * scale];
+  if (vec3IsZero(translation)) {
+    return undefined;
+  }
+
+  return translation;
+}
+
 export function generateGltfData(
   outputFilePath: string,
   model: BBModel,
@@ -972,17 +1028,39 @@ export function generateGltfData(
       });
     }
   } else {
-    meshInputs.push({
-      nodeName: modelName,
-      meshName: modelName,
-      rootPath: [],
-      entries: [{ faceBatches: allFaceBatches, jointIndex: 0 }],
-      jointNodeIndices: [],
-    });
+    for (const [index, sceneElement] of sceneElements.entries()) {
+      const batches = filterFaceBatches(buildFaceBatches(model, [sceneElement], finalScale), { textureKeys });
+      if (batches.length === 0) {
+        continue;
+      }
+
+      const meshName = sceneElement.element.name ?? `mesh_${index}`;
+      meshInputs.push({
+        nodeName: meshName,
+        meshName,
+        rootPath: [],
+        translation: meshElementNodeTranslation(sceneElement, finalScale),
+        entries: [{ faceBatches: batches, jointIndex: 0 }],
+        jointNodeIndices: [],
+      });
+    }
+
+    if (meshInputs.length === 0) {
+      meshInputs.push({
+        nodeName: modelName,
+        meshName: modelName,
+        rootPath: [],
+        entries: [{ faceBatches: allFaceBatches, jointIndex: 0 }],
+        jointNodeIndices: [],
+      });
+    }
   }
 
   for (const meshInput of meshInputs) {
-    const meshEntry = buildMeshEntry(meshInput.entries, meshInput.translation ?? [0, 0, 0]);
+    const meshEntry = buildMeshEntry(
+      meshInput.entries,
+      exportGroupsAsArmature ? (meshInput.translation ?? [0, 0, 0]) : [0, 0, 0],
+    );
     if (!meshEntry) {
       continue;
     }
@@ -1088,6 +1166,8 @@ export function generateGltfData(
     sceneRootNodes = [armatureNodeIndex];
   }
 
+  const reachableNodeIndices = collectReachableNodeIndices(nodes, sceneRootNodes);
+
   const animationOutput = [] as Array<{
     name: string;
     samplers: Array<{ input: number; interpolation: string; output: number }>;
@@ -1105,7 +1185,12 @@ export function generateGltfData(
           ?? (track.name ? groupNodes.nameToNode.get(track.name) : undefined)
           ?? groupNodes.nameToNode.get(entry.key);
 
-        if (targetNode === undefined) {
+        if (
+          targetNode === undefined
+          || targetNode < 0
+          || targetNode >= nodes.length
+          || !reachableNodeIndices.has(targetNode)
+        ) {
           continue;
         }
 
