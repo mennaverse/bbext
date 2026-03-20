@@ -36,6 +36,10 @@ export function generateObjData(
   let vertexIndex = 1;
 
   for (const batch of faceBatches) {
+    if (batch.positions.length < 3 || batch.uvs.length !== batch.positions.length) {
+      continue;
+    }
+
     linesObj.push(`usemtl ${batch.materialName}`);
 
     for (const corner of batch.positions) {
@@ -47,8 +51,10 @@ export function generateObjData(
     }
 
     linesObj.push(`f ${vertexIndex}/${vertexIndex} ${vertexIndex + 1}/${vertexIndex + 1} ${vertexIndex + 2}/${vertexIndex + 2}`);
-    linesObj.push(`f ${vertexIndex}/${vertexIndex} ${vertexIndex + 2}/${vertexIndex + 2} ${vertexIndex + 3}/${vertexIndex + 3}`);
-    vertexIndex += 4;
+    if (batch.positions.length === 4) {
+      linesObj.push(`f ${vertexIndex}/${vertexIndex} ${vertexIndex + 2}/${vertexIndex + 2} ${vertexIndex + 3}/${vertexIndex + 3}`);
+    }
+    vertexIndex += batch.positions.length;
   }
 
   for (const material of materialRefs.materials) {

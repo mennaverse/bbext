@@ -1,8 +1,13 @@
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 
 export async function ensureDirForFile(filePath: string): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
+}
+
+export async function clearDirectory(directoryPath: string): Promise<void> {
+  await rm(directoryPath, { recursive: true, force: true });
+  await mkdir(directoryPath, { recursive: true });
 }
 
 export async function listBBModelsRecursive(inputPath: string): Promise<string[]> {

@@ -1,5 +1,5 @@
-import { access } from "node:fs/promises";
-import { basename, dirname, extname, relative, resolve } from "node:path";
+import { access, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { buildSceneElements, loadBBModel } from "./bbmodel";
 import { writeFbxOutput, generateFbxData } from "./exporters/fbx";
 import { generateGltfThreeData, writeGltfThreeOutput } from "./exporters/gltf-three";
@@ -12,13 +12,127 @@ import {
   outputPathWithVariant,
   sanitizeMaterialName,
 } from "./exporters/shared";
-import { ensureDirForFile, listBBModelsRecursive } from "./files";
+import { clearDirectory, ensureDirForFile, listBBModelsRecursive } from "./files";
 import type { BBModel, ConvertResult, ExportOptions } from "./types";
 
 export interface ConvertRequest {
   inputPath: string;
   outputPath: string;
   options: ExportOptions;
+}
+
+interface GodotCleanupManifest {
+  version: 1;
+  foldersBySource: Record<string, string>;
+}
+
+const GODOT_CLEANUP_MANIFEST_FILE = ".bbext-godot-cleanup.json";
+
+function shouldUseGodotCleanup(options: ExportOptions): boolean {
+  return Boolean(options.cleanOutputGodot) && (options.outputExtension === "gltf" || options.outputExtension === "gltf-three");
+}
+
+function resolveManifestPath(outputRoot: string): string {
+  return join(outputRoot, GODOT_CLEANUP_MANIFEST_FILE);
+}
+
+async function readGodotCleanupManifest(outputRoot: string): Promise<GodotCleanupManifest> {
+  const manifestPath = resolveManifestPath(outputRoot);
+  try {
+    const raw = await readFile(manifestPath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<GodotCleanupManifest>;
+    if (parsed.version !== 1 || typeof parsed.foldersBySource !== "object" || parsed.foldersBySource === null) {
+      return { version: 1, foldersBySource: {} };
+    }
+
+    const sanitizedEntries = Object.entries(parsed.foldersBySource)
+      .filter(([source, folder]) => typeof source === "string" && source.length > 0 && typeof folder === "string" && folder.length > 0);
+    return {
+      version: 1,
+      foldersBySource: Object.fromEntries(sanitizedEntries),
+    };
+  } catch {
+    return { version: 1, foldersBySource: {} };
+  }
+}
+
+async function writeGodotCleanupManifest(outputRoot: string, foldersBySource: Record<string, string>): Promise<void> {
+  const manifestPath = resolveManifestPath(outputRoot);
+  const manifest: GodotCleanupManifest = {
+    version: 1,
+    foldersBySource,
+  };
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+}
+
+async function removeNonImportFilesRecursive(directoryPath: string): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(directoryPath, { withFileTypes: true, encoding: "utf8" });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryName = String(entry.name);
+    const entryPath = join(directoryPath, entryName);
+    if (entry.isDirectory()) {
+      await removeNonImportFilesRecursive(entryPath);
+      try {
+        const nestedEntries = await readdir(entryPath, { encoding: "utf8" });
+        if (nestedEntries.length === 0) {
+          await rm(entryPath, { recursive: false, force: true });
+        }
+      } catch {
+        // Ignore race conditions while pruning.
+      }
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (entryName.toLowerCase().endsWith(".import")) {
+      continue;
+    }
+    await rm(entryPath, { force: true });
+  }
+}
+
+async function cleanGodotArtifactsForDestination(destinationPath: string): Promise<void> {
+  const destinationDir = dirname(destinationPath);
+  const destinationName = basename(destinationPath, extname(destinationPath));
+  const textureDir = join(destinationDir, `${destinationName}_textures`);
+
+  await rm(destinationPath, { force: true });
+  await rm(join(destinationDir, `${destinationName}.bin`), { force: true });
+  await removeNonImportFilesRecursive(textureDir);
+}
+
+function cloneModelWithForcedTexture(model: BBModel, textureKey: string): BBModel {
+  const clone = JSON.parse(JSON.stringify(model)) as BBModel;
+
+  for (const element of clone.elements ?? []) {
+    if (element.faces) {
+      for (const face of Object.values(element.faces)) {
+        if (face) {
+          face.texture = textureKey;
+        }
+      }
+    }
+
+    const maybeMesh = element as unknown as {
+      type?: string;
+      faces?: Record<string, { texture?: string | number }>;
+    };
+    if (maybeMesh.type === "mesh" && maybeMesh.faces) {
+      for (const face of Object.values(maybeMesh.faces)) {
+        face.texture = textureKey;
+      }
+    }
+  }
+
+  return clone;
 }
 
 function resolveModelFolderName(source: string, model: BBModel, mode: ExportOptions["organizeByModel"]): string | null {
@@ -59,8 +173,31 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
   const absoluteInput = resolve(request.inputPath);
   const inputRoot = absoluteInput.toLowerCase().endsWith(".bbmodel") ? dirname(absoluteInput) : absoluteInput;
   const outputRoot = resolve(request.outputPath);
+  const useGodotCleanup = shouldUseGodotCleanup(request.options);
+
+  if (request.options.cleanOutput) {
+    await clearDirectory(outputRoot);
+  }
 
   const bbmodels = await listBBModelsRecursive(absoluteInput);
+  const sourceSet = new Set(bbmodels.map((source) => resolve(source)));
+  const foldersBySourceForManifest: Record<string, string> = {};
+
+  if (useGodotCleanup && request.options.organizeByModel) {
+    const previousManifest = await readGodotCleanupManifest(outputRoot);
+    for (const [source, folderPath] of Object.entries(previousManifest.foldersBySource)) {
+      const normalizedSource = resolve(source);
+      if (sourceSet.has(normalizedSource)) {
+        continue;
+      }
+
+      const resolvedFolderPath = resolve(folderPath);
+      if (resolvedFolderPath.startsWith(outputRoot)) {
+        await rm(resolvedFolderPath, { recursive: true, force: true });
+      }
+    }
+  }
+
   const converted: ConvertResult[] = [];
 
   for (const source of bbmodels) {
@@ -70,6 +207,10 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
       ? "gltf"
       : request.options.outputExtension;
     const destination = baseDestination.replace(/\.converted$/i, `.${outputFileExtension}`);
+    if (useGodotCleanup) {
+      const modelFolderPath = dirname(baseDestination);
+      foldersBySourceForManifest[resolve(source)] = modelFolderPath;
+    }
     const sceneElements = buildSceneElements(model);
     const faceBatches = buildFaceBatches(model, sceneElements, request.options.gltf?.modelScale ?? request.options.scale);
         const textureVariants = request.options.splitByTexture
@@ -86,6 +227,22 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
       const currentDestination = textureVariant === "__all__"
         ? destination
         : outputPathWithVariant(destination, textureVariant);
+      if (useGodotCleanup) {
+        await cleanGodotArtifactsForDestination(currentDestination);
+      }
+      const shouldRemapToDeclaredTexture = Boolean(
+        request.options.splitByAllDeclaredTextures
+        && textureVariant !== "__all__"
+        && selectedTextureKeys
+        && faceBatches.length > 0
+        && !faceBatches.some((batch) => selectedTextureKeys.has(batch.textureKey)),
+      );
+      const variantModel = shouldRemapToDeclaredTexture
+        ? cloneModelWithForcedTexture(model, textureVariant)
+        : model;
+      const variantSceneElements = shouldRemapToDeclaredTexture
+        ? buildSceneElements(variantModel)
+        : sceneElements;
 
       if (!request.options.overwrite) {
         try {
@@ -99,13 +256,13 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
       await ensureDirForFile(currentDestination);
 
       if (request.options.outputExtension === "obj") {
-        const objData = generateObjData(currentDestination, model, sceneElements, request.options.scale, selectedTextureKeys);
-        await writeObjOutput(source, currentDestination, objData, model, selectedTextureKeys);
+        const objData = generateObjData(currentDestination, variantModel, variantSceneElements, request.options.scale, selectedTextureKeys);
+        await writeObjOutput(source, currentDestination, objData, variantModel, selectedTextureKeys);
       } else if (request.options.outputExtension === "gltf") {
         const gltfData = generateGltfData(
           currentDestination,
-          model,
-          sceneElements,
+          variantModel,
+          variantSceneElements,
           request.options.scale,
           {
             modelScale: request.options.gltf?.modelScale,
@@ -115,28 +272,33 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
           },
           selectedTextureKeys,
         );
-        await writeGltfOutput(source, currentDestination, gltfData, model, selectedTextureKeys);
+        await writeGltfOutput(source, currentDestination, gltfData, variantModel, selectedTextureKeys);
       } else if (request.options.outputExtension === "gltf-three") {
         const gltfData = await generateGltfThreeData(
-          source,
           currentDestination,
-          model,
-          sceneElements,
+          variantModel,
+          variantSceneElements,
           request.options.scale,
           {
             modelScale: request.options.gltf?.modelScale,
             embedTextures: request.options.gltf?.embedTextures,
+            exportGroupsAsArmature: request.options.gltf?.exportGroupsAsArmature,
+            exportAnimations: request.options.gltf?.exportAnimations,
           },
           selectedTextureKeys,
         );
-        await writeGltfThreeOutput(currentDestination, gltfData);
+        await writeGltfThreeOutput(source, currentDestination, gltfData, variantModel, selectedTextureKeys);
       } else {
-        const fbxData = generateFbxData(currentDestination, model, sceneElements, request.options.scale, selectedTextureKeys);
+        const fbxData = generateFbxData(currentDestination, variantModel, variantSceneElements, request.options.scale, selectedTextureKeys);
         await writeFbxOutput(currentDestination, fbxData);
       }
 
       converted.push({ source, output: currentDestination });
     }
+  }
+
+  if (useGodotCleanup && request.options.organizeByModel) {
+    await writeGodotCleanupManifest(outputRoot, foldersBySourceForManifest);
   }
 
   return converted;

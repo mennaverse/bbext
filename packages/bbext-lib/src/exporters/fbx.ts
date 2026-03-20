@@ -27,6 +27,10 @@ export function generateFbxData(
 
   let cursor = 0;
   for (const face of faces) {
+    if (face.positions.length < 3 || face.uvs.length !== face.positions.length) {
+      continue;
+    }
+
     for (const p of face.positions) {
       vertices.push(p[0], p[1], p[2]);
     }
@@ -35,10 +39,14 @@ export function generateFbxData(
     }
 
     polygonIndices.push(cursor, cursor + 1, -(cursor + 2) - 1);
-    polygonIndices.push(cursor, cursor + 2, -(cursor + 3) - 1);
+    uvIndices.push(cursor, cursor + 1, cursor + 2);
 
-    uvIndices.push(cursor, cursor + 1, cursor + 2, cursor, cursor + 2, cursor + 3);
-    cursor += 4;
+    if (face.positions.length === 4) {
+      polygonIndices.push(cursor, cursor + 2, -(cursor + 3) - 1);
+      uvIndices.push(cursor, cursor + 2, cursor + 3);
+    }
+
+    cursor += face.positions.length;
   }
 
   const geometryId = 100000;

@@ -6,7 +6,7 @@ Currently supported output formats:
 
 - `.obj` (with `.mtl` and extracted textures when available)
 - `.gltf` (with `.bin` and textures in a companion folder)
-- `.gltf-three` (generated with Three.js `GLTFExporter` via `node-three-gltf`)
+- `.gltf-three` (same `.gltf` payload as the canonical exporter, kept as a compatibility target)
 - `.fbx` (ASCII FBX focused on geometry and UVs)
 
 ## Structure
@@ -16,47 +16,20 @@ Currently supported output formats:
 
 ## Requirements
 
-- Bun 1.x
+- pnpm
+- tsx
 
 ## Install dependencies
 
 ```bash
-bun install
+pnpm install
 ```
 
 ## Run in dev mode
 
 ```bash
-bun run dev --cwd apps/bbext-cli -- --help
+pnpm run dev --cwd apps/bbext-cli -- --help
 ```
-
-## Build the CLI with Bun
-
-Generates a compiled binary at `apps/bbext-cli/dist/bbext`:
-
-```bash
-bun run build
-```
-
-Or directly from the CLI package:
-
-```bash
-bun run --cwd apps/bbext-cli build
-```
-
-## Build a single .exe (alternative packager)
-
-If you need one standalone `.exe` that works from any `cwd`, use the pkg-based build:
-
-```bash
-bun run build:single
-```
-
-Output:
-
-- `apps/bbext-cli/dist/bbext-single.exe`
-
-This path keeps Bun for development and conversion code, but uses `pkg` only for final Windows single-file packaging.
 
 ## Usage
 
@@ -78,6 +51,8 @@ Options:
 - `--export-groups-as-armature`: export outliner groups as an armature in glTF
 - `--export-animations`: export animations to glTF
 - `--overwrite`: overwrite existing files
+- `--clean-output`: clear destination folder before conversion (flag, default `false`)
+- `--clean-output-godot`: preserve Godot `.import` files while cleaning generated glTF artifacts
 
 Example:
 
@@ -91,10 +66,10 @@ glTF example with Blockbench-style options:
 bbext -i ./models -o ./exports -e gltf --model-scale 0.0625 --embed-textures --export-groups-as-armature --export-animations --overwrite
 ```
 
-glTF example using Three.js exporter (`node-three-gltf`):
+glTF example using the `gltf-three` compatibility target:
 
 ```bash
-bbext -i ./models -o ./exports -e gltf-three --model-scale 0.0625 --embed-textures --overwrite
+bbext -i ./models -o ./exports -e gltf-three --model-scale 0.0625 --embed-textures --export-groups-as-armature --export-animations --overwrite
 ```
 
 Split one `.bbmodel` into one output file per texture:
