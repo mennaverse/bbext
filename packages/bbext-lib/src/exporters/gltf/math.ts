@@ -202,3 +202,61 @@ export function translationBetween(parentOrigin: Vec3 | undefined, childOrigin: 
     (child[2] - parent[2]) * scale,
   ];
 }
+
+export function normalizeQuat(quat: [number, number, number, number]): [number, number, number, number] {
+  const length = Math.hypot(quat[0], quat[1], quat[2], quat[3]);
+  if (length <= SAMPLE_EPSILON) {
+    return [0, 0, 0, 1];
+  }
+
+  return [quat[0] / length, quat[1] / length, quat[2] / length, quat[3] / length];
+}
+
+export function slerpQuat(
+  a: [number, number, number, number],
+  b: [number, number, number, number],
+  t: number,
+): [number, number, number, number] {
+  let q1 = normalizeQuat(a);
+  let q2 = normalizeQuat(b);
+
+  let dot = q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3];
+  if (dot < 0) {
+    dot = -dot;
+    q2 = [-q2[0], -q2[1], -q2[2], -q2[3]];
+  }
+
+  if (dot > 0.9995) {
+    return normalizeQuat([
+      lerp(q1[0], q2[0], t),
+      lerp(q1[1], q2[1], t),
+      lerp(q1[2], q2[2], t),
+      lerp(q1[3], q2[3], t),
+    ]);
+  }
+
+  const theta0 = Math.acos(Math.min(Math.max(dot, -1), 1));
+  const sinTheta0 = Math.sin(theta0);
+  if (Math.abs(sinTheta0) <= SAMPLE_EPSILON) {
+    return q1;
+  }
+
+  const theta = theta0 * t;
+  const sinTheta = Math.sin(theta);
+  const s0 = Math.cos(theta) - dot * sinTheta / sinTheta0;
+  const s1 = sinTheta / sinTheta0;
+
+  return [
+    q1[0] * s0 + q2[0] * s1,
+    q1[1] * s0 + q2[1] * s1,
+    q1[2] * s0 + q2[2] * s1,
+    q1[3] * s0 + q2[3] * s1,
+  ];
+}
+
+export function quatAngularError(a: [number, number, number, number], b: [number, number, number, number]): number {
+  const q1 = normalizeQuat(a);
+  const q2 = normalizeQuat(b);
+  const dot = Math.min(Math.max(Math.abs(q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3]), -1), 1);
+  return 2 * Math.acos(dot);
+}

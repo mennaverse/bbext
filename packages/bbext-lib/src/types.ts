@@ -104,6 +104,8 @@ export interface Transform {
 
 export interface ExportOptions {
   outputExtension: "obj" | "gltf" | "gltf-three" | "fbx";
+  explicitOutputFilePath?: string;
+  forcedTextureIndex?: number;
   scale: number;
   overwrite: boolean;
   cleanOutput?: boolean;

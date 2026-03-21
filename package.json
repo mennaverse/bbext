@@ -2,9 +2,10 @@
   "name": "bbext",
   "private": true,
   "scripts": {
-    "dev": "bun run --cwd apps/bbext-cli dev",
-    "start": "bun run --cwd apps/bbext-cli start",
-    "run": "bun run --cwd apps/bbext-cli run",
-    "run:tsx": "bun run --cwd apps/bbext-cli run:tsx"
+    "dev": "pnpm run --filter @bbext/cli dev",
+    "start": "pnpm run --filter @bbext/cli start",
+    "run": "pnpm run --filter @bbext/cli run",
+    "run:tsx": "pnpm run --filter @bbext/cli run:tsx",
+    "test:gltf": "pnpm run --filter @bbext/lib test:gltf"
   }
 }

@@ -24,6 +24,7 @@ export interface GroupNodeInfo {
   nameToNode: Map<string, number>;
   pathToGroup: Map<string, BBGroup>;
   pathToNode: Map<string, number>;
+  pathVisitOrder: Map<string, number>;
   uuidToNode: Map<string, number>;
   bindMatrixByNode: Map<number, number[]>;
   rootGroupNodes: number[];

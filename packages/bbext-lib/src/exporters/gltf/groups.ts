@@ -21,10 +21,12 @@ export function buildGroupNodes(
   const nameToNode = new Map<string, number>();
   const pathToGroup = new Map<string, BBGroup>();
   const pathToNode = new Map<string, number>();
+  const pathVisitOrder = new Map<string, number>();
   const uuidToNode = new Map<string, number>();
   const bindMatrixByNode = new Map<number, number[]>();
   const rootGroupNodes: number[] = [];
   const groupLookup = getGroupLookup(model);
+  let visitCounter = 0;
 
   function visitItem(
     item: BBOutlinerNode,
@@ -39,6 +41,10 @@ export function buildGroupNodes(
     const resolved = item.uuid ? groupLookup.get(item.uuid) ?? item : item;
     const nodeName = resolved.name ?? item.name ?? "root";
     const nodePath = [...path, nodeName].join("/");
+    if (!pathVisitOrder.has(nodePath)) {
+      pathVisitOrder.set(nodePath, visitCounter);
+      visitCounter += 1;
+    }
     const localTranslation = parentGroup
       ? translationBetween(parentGroup.origin, resolved.origin, scale)
       : [0, 0, 0] as any;
@@ -98,6 +104,7 @@ export function buildGroupNodes(
     nameToNode,
     pathToGroup,
     pathToNode,
+    pathVisitOrder,
     uuidToNode,
     bindMatrixByNode,
     rootGroupNodes,

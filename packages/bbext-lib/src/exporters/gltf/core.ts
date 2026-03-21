@@ -1,4 +1,4 @@
-import type { BBModel, SceneElement } from "../../types";
+import type { BBModel, SceneElement, BBElement } from "../../types";
 import type { FaceBatch } from "../shared";
 import { buildFaceBatches, collectMaterialRefs, filterFaceBatches, modelFileNameFromPath, resolveTextureMap, textureRelativeUri } from "../shared";
 import type { GltfData, GltfExportOptions, GltfPrimitiveBuild } from "./types";
@@ -7,6 +7,62 @@ import { sampleRotationTrack, sampleTrackVec3, normalizeTracks } from "./animati
 import { concatUint8, padTo4 } from "./buffers";
 import { computeNormal, computePositionMinMax } from "./math";
 import type { Vec3 } from "../../types";
+import { vec3IsZero } from "./math";
+
+function collectReachableNodeIndices(
+  nodes: Array<Record<string, unknown>>,
+  roots: number[],
+): Set<number> {
+  const reachable = new Set<number>();
+  const stack = [...roots];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined || reachable.has(current) || current < 0 || current >= nodes.length) {
+      continue;
+    }
+
+    reachable.add(current);
+    const node = nodes[current] as { children?: unknown };
+    if (!Array.isArray(node.children)) {
+      continue;
+    }
+
+    for (const child of node.children) {
+      if (typeof child === "number") {
+        stack.push(child);
+      }
+    }
+  }
+
+  return reachable;
+}
+
+function meshElementNodeTranslation(sceneElement: SceneElement, scale: number): Vec3 | undefined {
+  const meshCandidate = sceneElement.element as BBElement & {
+    type?: string;
+    vertices?: unknown;
+    faces?: unknown;
+  };
+  const isMeshElement = meshCandidate.type === "mesh"
+    || (typeof meshCandidate.vertices === "object" && meshCandidate.vertices !== null
+      && typeof meshCandidate.faces === "object" && meshCandidate.faces !== null);
+  if (!isMeshElement) {
+    return undefined;
+  }
+
+  const origin = sceneElement.element.origin;
+  if (!Array.isArray(origin) || origin.length < 3) {
+    return undefined;
+  }
+
+  const translation: Vec3 = [origin[0] * scale, origin[1] * scale, origin[2] * scale];
+  if (vec3IsZero(translation)) {
+    return undefined;
+  }
+
+  return translation;
+}
 
 export function generateGltfData(
   outputFilePath: string,
@@ -378,15 +434,32 @@ function buildMeshInputs(
       });
     }
 
-    // Fallback for models without outliner group hierarchy: still emit mesh geometry.
+    // Fallback for models without outliner group hierarchy: emit one mesh per element,
+    // matching Blockbench behaviour.
     if (meshInputs.length === 0) {
-      meshInputs.push({
-        nodeName: modelName,
-        meshName: modelName,
-        rootPath: [],
-        entries: [{ faceBatches: allFaceBatches, jointIndex: 0 }],
-        jointNodeIndices: [],
-      });
+      for (const [index, sceneElement] of sceneElements.entries()) {
+        const batches = filterFaceBatches(buildFaceBatches(model, [sceneElement], finalScale), { textureKeys });
+        if (batches.length === 0) {
+          continue;
+        }
+        meshInputs.push({
+          nodeName: sceneElement.element.name ?? `mesh_${index}`,
+          meshName: sceneElement.element.name ?? `mesh_${index}`,
+          rootPath: [],
+          entries: [{ faceBatches: batches, jointIndex: 0 }],
+          jointNodeIndices: [],
+        });
+      }
+      // Final fallback if every element is empty.
+      if (meshInputs.length === 0) {
+        meshInputs.push({
+          nodeName: modelName,
+          meshName: modelName,
+          rootPath: [],
+          entries: [{ faceBatches: allFaceBatches, jointIndex: 0 }],
+          jointNodeIndices: [],
+        });
+      }
     }
   } else if (useGroupHierarchy) {
     for (const [index, sceneElement] of sceneElements.entries()) {
@@ -609,13 +682,17 @@ function buildMeshEntry(
 
   for (const entry of orderedEntries) {
     for (const face of entry.faceBatches) {
+        if (face.positions.length < 3 || face.uvs.length !== face.positions.length) {
+          continue;
+        }
+
       const baseVertex = positions.length / 3;
       const appliedOffset = entry.jointIndex === 0 ? positionOffset : [0, 0, 0];
       for (const p of face.positions) {
         positions.push(p[0] - appliedOffset[0], p[1] - appliedOffset[1], p[2] - appliedOffset[2]);
       }
       const n = computeNormal(face.positions[0], face.positions[1], face.positions[2]);
-      for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < face.positions.length; i++) {
         normals.push(n[0], n[1], n[2]);
         joints.push(0, entry.jointIndex, 0, 0);
         weights.push(0, 1, 0, 0);
@@ -637,10 +714,15 @@ function buildMeshEntry(
         baseVertex,
         baseVertex + 1,
         baseVertex + 2,
-        baseVertex,
-        baseVertex + 2,
-        baseVertex + 3,
       );
+
+      if (face.positions.length === 4) {
+        primitive.indices.push(
+          baseVertex,
+          baseVertex + 2,
+          baseVertex + 3,
+        );
+      }
     }
   }
 
@@ -648,6 +730,8 @@ function buildMeshEntry(
   if (vertexCount === 0) {
     return null;
   }
+
+  const hasJoints = orderedEntries.some((entry) => entry.jointIndex > 0);
 
   const minMax = computePositionMinMax(positions);
   const positionAccessorIndex = appendAccessor(
@@ -680,31 +764,40 @@ function buildMeshEntry(
     [Math.max(...uvs.filter((_, index) => index % 2 === 0)), Math.max(...uvs.filter((_, index) => index % 2 === 1))],
   );
 
-  const jointAccessorIndex = appendAccessor(
-    new Uint8Array(new Uint16Array(joints).buffer),
-    5123,
-    vertexCount,
-    "VEC4",
-    34962,
-    [0, Math.min(...joints.filter((_, index) => index % 4 === 1)), 0, 0],
-    [0, Math.max(...joints.filter((_, index) => index % 4 === 1)), 0, 0],
-  );
+  let jointAccessorIndex: number | undefined;
+  let weightAccessorIndex: number | undefined;
 
-  const weightAccessorIndex = appendAccessor(
-    new Uint8Array(new Float32Array(weights).buffer),
-    5126,
-    vertexCount,
-    "VEC4",
-    34962,
-    [0, 1, 0, 0],
-    [0, 1, 0, 0],
-  );
+  if (hasJoints) {
+    jointAccessorIndex = appendAccessor(
+      new Uint8Array(new Uint16Array(joints).buffer),
+      5123,
+      vertexCount,
+      "VEC4",
+      34962,
+      [0, Math.min(...joints.filter((_, index) => index % 4 === 1)), 0, 0],
+      [0, Math.max(...joints.filter((_, index) => index % 4 === 1)), 0, 0],
+    );
+
+    weightAccessorIndex = appendAccessor(
+      new Uint8Array(new Float32Array(weights).buffer),
+      5126,
+      vertexCount,
+      "VEC4",
+      34962,
+      [0, 1, 0, 0],
+      [0, 1, 0, 0],
+    );
+  }
 
   setBufferViewStride(positionAccessorIndex, 12);
   setBufferViewStride(normalAccessorIndex, 12);
   setBufferViewStride(uvAccessorIndex, 8);
-  setBufferViewStride(jointAccessorIndex, 8);
-  setBufferViewStride(weightAccessorIndex, 16);
+  if (jointAccessorIndex !== undefined) {
+    setBufferViewStride(jointAccessorIndex, 8);
+  }
+  if (weightAccessorIndex !== undefined) {
+    setBufferViewStride(weightAccessorIndex, 16);
+  }
 
   const useUint32 = vertexCount > 65535;
   const indexComponentType = useUint32 ? 5125 : 5123;
@@ -724,15 +817,21 @@ function buildMeshEntry(
         [maxIndex],
       );
 
+      const attributes: Record<string, number> = {
+        POSITION: positionAccessorIndex,
+        NORMAL: normalAccessorIndex,
+        TEXCOORD_0: uvAccessorIndex,
+      };
+      if (jointAccessorIndex !== undefined) {
+        attributes.JOINTS_0 = jointAccessorIndex;
+      }
+      if (weightAccessorIndex !== undefined) {
+        attributes.WEIGHTS_0 = weightAccessorIndex;
+      }
+
       return {
         mode: 4,
-        attributes: {
-          POSITION: positionAccessorIndex,
-          NORMAL: normalAccessorIndex,
-          TEXCOORD_0: uvAccessorIndex,
-          JOINTS_0: jointAccessorIndex,
-          WEIGHTS_0: weightAccessorIndex,
-        },
+        attributes,
         indices: indicesAccessor,
         material: materialIndexByName.get(primitive.materialName) ?? 0,
       };

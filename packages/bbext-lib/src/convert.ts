@@ -9,6 +9,7 @@ import {
   buildFaceBatches,
   collectDeclaredTextureKeys,
   collectUsedTextureKeys,
+  getTextureCanonicalKey,
   outputPathWithVariant,
   sanitizeMaterialName,
 } from "./exporters/shared";
@@ -19,6 +20,14 @@ export interface ConvertRequest {
   inputPath: string;
   outputPath: string;
   options: ExportOptions;
+  onProgress?: (progress: ConvertProgress) => void;
+}
+
+export interface ConvertProgress {
+  phase: "model-processing" | "model-completed" | "done";
+  totalModels: number;
+  processedModels: number;
+  source?: string;
 }
 
 interface GodotCleanupManifest {
@@ -169,6 +178,20 @@ function outputPathFromSource(source: string, inputRoot: string, outputRoot: str
   return resolve(outputRoot, dest);
 }
 
+function resolveForcedTextureKey(model: BBModel, textureIndex: number): string {
+  if (!Number.isInteger(textureIndex) || textureIndex < 0) {
+    throw new Error(`Invalid forced texture index '${textureIndex}'. Use an integer >= 0.`);
+  }
+
+  const textures = model.textures ?? [];
+  const texture = textures[textureIndex];
+  if (!texture) {
+    throw new Error(`Texture index ${textureIndex} not found for model.`);
+  }
+
+  return getTextureCanonicalKey(texture, textureIndex, textures);
+}
+
 export async function convertBBModelsRecursively(request: ConvertRequest): Promise<ConvertResult[]> {
   const absoluteInput = resolve(request.inputPath);
   const inputRoot = absoluteInput.toLowerCase().endsWith(".bbmodel") ? dirname(absoluteInput) : absoluteInput;
@@ -179,6 +202,7 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
     await clearDirectory(outputRoot);
   }
 
+  // Pre-discovery: collect all bbmodel files first
   const bbmodels = await listBBModelsRecursive(absoluteInput);
   const sourceSet = new Set(bbmodels.map((source) => resolve(source)));
   const foldersBySourceForManifest: Record<string, string> = {};
@@ -199,20 +223,40 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
   }
 
   const converted: ConvertResult[] = [];
+  let processedModels = 0;
+
+  const emitProgress = (progress: Omit<ConvertProgress, "totalModels" | "processedModels">): void => {
+    request.onProgress?.({
+      totalModels: bbmodels.length,
+      processedModels,
+      ...progress,
+    });
+  };
 
   for (const source of bbmodels) {
+    emitProgress({ phase: "model-processing", source });
     const model = await loadBBModel(source);
-    const baseDestination = outputPathFromSource(source, inputRoot, outputRoot, model, request.options);
+    const explicitOutputPath = request.options.explicitOutputFilePath
+      ? resolve(request.options.explicitOutputFilePath)
+      : undefined;
+    const baseDestination = explicitOutputPath
+      ? explicitOutputPath
+      : outputPathFromSource(source, inputRoot, outputRoot, model, request.options);
     const outputFileExtension = request.options.outputExtension === "gltf-three"
       ? "gltf"
       : request.options.outputExtension;
-    const destination = baseDestination.replace(/\.converted$/i, `.${outputFileExtension}`);
+    const destination = extname(baseDestination).length > 0
+      ? baseDestination
+      : `${baseDestination}.${outputFileExtension}`;
     if (useGodotCleanup) {
       const modelFolderPath = dirname(baseDestination);
       foldersBySourceForManifest[resolve(source)] = modelFolderPath;
     }
     const sceneElements = buildSceneElements(model);
     const faceBatches = buildFaceBatches(model, sceneElements, request.options.gltf?.modelScale ?? request.options.scale);
+    const forcedTextureKey = request.options.forcedTextureIndex !== undefined
+      ? resolveForcedTextureKey(model, request.options.forcedTextureIndex)
+      : undefined;
         const textureVariants = request.options.splitByTexture
           ? (() => {
         const keys = request.options.splitByAllDeclaredTextures
@@ -221,17 +265,21 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
             return keys.length > 0 ? keys : ["default"];
           })()
           : ["__all__"];
+    const finalTextureVariants = forcedTextureKey ? [forcedTextureKey] : textureVariants;
 
-    for (const textureVariant of textureVariants) {
+    for (const textureVariant of finalTextureVariants) {
       const selectedTextureKeys = textureVariant === "__all__" ? undefined : new Set<string>([textureVariant]);
+      const useExactDestinationForForcedTexture = Boolean(forcedTextureKey && textureVariant === forcedTextureKey);
       const currentDestination = textureVariant === "__all__"
         ? destination
+        : useExactDestinationForForcedTexture
+          ? destination
         : outputPathWithVariant(destination, textureVariant);
       if (useGodotCleanup) {
         await cleanGodotArtifactsForDestination(currentDestination);
       }
       const shouldRemapToDeclaredTexture = Boolean(
-        request.options.splitByAllDeclaredTextures
+        (request.options.splitByAllDeclaredTextures || forcedTextureKey)
         && textureVariant !== "__all__"
         && selectedTextureKeys
         && faceBatches.length > 0
@@ -284,6 +332,7 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
             embedTextures: request.options.gltf?.embedTextures,
             exportGroupsAsArmature: request.options.gltf?.exportGroupsAsArmature,
             exportAnimations: request.options.gltf?.exportAnimations,
+            sourceFilePath: source,
           },
           selectedTextureKeys,
         );
@@ -295,11 +344,16 @@ export async function convertBBModelsRecursively(request: ConvertRequest): Promi
 
       converted.push({ source, output: currentDestination });
     }
+
+    processedModels += 1;
+    emitProgress({ phase: "model-completed", source });
   }
 
   if (useGodotCleanup && request.options.organizeByModel) {
     await writeGodotCleanupManifest(outputRoot, foldersBySourceForManifest);
   }
+
+  emitProgress({ phase: "done", source: undefined });
 
   return converted;
 }

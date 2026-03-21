@@ -27,11 +27,12 @@ export function buildMeshEntry(
     for (const face of entry.faceBatches) {
       const baseVertex = positions.length / 3;
       const appliedOffset = entry.jointIndex === 0 ? positionOffset : [0, 0, 0];
+      const faceVertexCount = face.positions.length;
       for (const p of face.positions) {
         positions.push(p[0] - appliedOffset[0], p[1] - appliedOffset[1], p[2] - appliedOffset[2]);
       }
       const n = computeNormal(face.positions[0], face.positions[1], face.positions[2]);
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < faceVertexCount; i++) {
         normals.push(n[0], n[1], n[2]);
         joints.push(0, entry.jointIndex, 0, 0);
         weights.push(0, 1, 0, 0);
@@ -49,14 +50,18 @@ export function buildMeshEntry(
         primitiveByMaterial.set(face.materialName, primitive);
       }
 
-      primitive.indices.push(
-        baseVertex,
-        baseVertex + 1,
-        baseVertex + 2,
-        baseVertex,
-        baseVertex + 2,
-        baseVertex + 3,
-      );
+      if (faceVertexCount === 3) {
+        primitive.indices.push(baseVertex, baseVertex + 1, baseVertex + 2);
+      } else if (faceVertexCount === 4) {
+        primitive.indices.push(
+          baseVertex,
+          baseVertex + 1,
+          baseVertex + 2,
+          baseVertex,
+          baseVertex + 2,
+          baseVertex + 3,
+        );
+      }
     }
   }
 

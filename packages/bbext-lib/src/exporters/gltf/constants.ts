@@ -1,3 +1,3 @@
 export const GLTF_ANIMATION_SAMPLE_RATE = 24;
-export const GLTF_ANIMATION_MAX_SAMPLES = 16;
+export const GLTF_ANIMATION_MAX_SAMPLES = 64;
 export const SAMPLE_EPSILON = 1e-5;

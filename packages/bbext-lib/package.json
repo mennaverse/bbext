@@ -2,6 +2,10 @@
   "name": "@bbext/lib",
   "version": "0.1.0",
   "type": "module",
+  "scripts": {
+    "test:gltf": "tsx scripts/compare-blockbench-gltf.ts",
+    "test:gltf-three": "tsx scripts/compare-blockbench-gltf-three.ts"
+  },
   "main": "src/index.ts",
   "module": "src/index.ts",
   "types": "src/index.ts",
