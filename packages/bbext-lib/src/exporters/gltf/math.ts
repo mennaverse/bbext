@@ -62,11 +62,12 @@ export function degreesToQuatXYZ(deg: Vec3): [number, number, number, number] {
   const cz = Math.cos(z / 2);
   const sz = Math.sin(z / 2);
 
+  // Blockbench/glTF exporter parity: use ZYX Euler composition order.
   return [
-    sx * cy * cz + cx * sy * sz,
-    cx * sy * cz - sx * cy * sz,
-    cx * cy * sz + sx * sy * cz,
-    cx * cy * cz - sx * sy * sz,
+    sx * cy * cz - cx * sy * sz,
+    cx * sy * cz + sx * cy * sz,
+    cx * cy * sz - sx * sy * cz,
+    cx * cy * cz + sx * sy * sz,
   ];
 }
 
@@ -97,6 +98,17 @@ export function lerpVec3(a: Vec3, b: Vec3, t: number): Vec3 {
   ];
 }
 
+/**
+ * Catmull-Rom spline interpolation for scalars.
+ * Used for smooth animation curves with overshoot/undershoot characteristics.
+ * 
+ * @param p0 Control point before the segment (not included in output range)
+ * @param p1 Start point of the segment (at t=0)
+ * @param p2 End point of the segment (at t=1)
+ * @param p3 Control point after the segment (not included in output range)
+ * @param t Interpolation parameter [0,1] between p1 and p2
+ * @returns Interpolated value using Catmull-Rom cubic spline
+ */
 export function catmullRomValue(p0: number, p1: number, p2: number, p3: number, t: number): number {
   const t2 = t * t;
   const t3 = t2 * t;
@@ -108,6 +120,16 @@ export function catmullRomValue(p0: number, p1: number, p2: number, p3: number, 
   );
 }
 
+/**
+ * Catmull-Rom spline interpolation for 3D vectors.
+ * Used in sampleTrackVec3() when keyframes specify interpolation="catmullrom".
+ * glTF doesn't natively support Catmull-Rom, so this is used during sampling
+ * to generate dense LINEAR keyframes that approximate the smooth curve.
+ * 
+ * Example: 2 keyframes with catmullrom interpolation at t=0 and t=1
+ * will be sampled at 24fps (GLTF_ANIMATION_SAMPLE_RATE) to create ~24
+ * linear keyframes that closely approximate the curved motion.
+ */
 export function catmullRomVec3(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: number): Vec3 {
   return [
     catmullRomValue(p0[0], p1[0], p2[0], p3[0], t),

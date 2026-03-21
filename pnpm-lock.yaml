@@ -36,6 +36,9 @@ importers:
         specifier: ^0.183.2
         version: 0.183.2
     devDependencies:
+      '@types/node':
+        specifier: ^25.5.0
+        version: 25.5.0
       '@types/three':
         specifier: ^0.183.1
         version: 0.183.1

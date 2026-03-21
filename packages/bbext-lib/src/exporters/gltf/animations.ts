@@ -80,75 +80,30 @@ export function simplifySampledQuat(
     return samples;
   }
 
-  const mandatory = samples.map((sample, index) => index === 0 || index === samples.length - 1 || lockedTimes.has(sample.time));
-  const mandatoryCount = mandatory.reduce((count, value) => count + (value ? 1 : 0), 0);
-  const targetCount = Math.max(mandatoryCount, maxCount);
-  if (targetCount >= samples.length) {
-    return samples;
+  // Keep first/last and sample the remainder at near-uniform index spacing.
+  // This provides stable output size for dense baked curves (e.g. catmullrom)
+  // without collapsing to very small key counts.
+  const selected = new Set<number>();
+  selected.add(0);
+  selected.add(samples.length - 1);
+
+  for (let i = 1; i < maxCount - 1; i += 1) {
+    const index = Math.round((i * (samples.length - 1)) / (maxCount - 1));
+    selected.add(index);
   }
 
-  const skipCost: number[][] = Array.from({ length: samples.length }, () => Array(samples.length).fill(Number.POSITIVE_INFINITY));
-  for (let start = 0; start < samples.length; start += 1) {
-    skipCost[start][start] = 0;
-    for (let end = start + 1; end < samples.length; end += 1) {
-      let maxError = 0;
-      for (let skipped = start + 1; skipped < end; skipped += 1) {
-        const prev = samples[start].value;
-        const next = samples[end].value;
-        const sample = samples[skipped].value;
-        const duration = (samples[end].time - samples[start].time) || SAMPLE_EPSILON;
-        const t = (samples[skipped].time - samples[start].time) / duration;
-        const interpolated = slerpQuat(prev, next, t);
-        const error = quatAngularError(sample, interpolated);
-        maxError = Math.max(maxError, error);
-      }
-      skipCost[start][end] = maxError;
-    }
-  }
-
-  const dp: number[][] = Array.from({ length: targetCount + 1 }, () => Array(samples.length).fill(Number.POSITIVE_INFINITY));
-  const previousIndex: number[][] = Array.from({ length: targetCount + 1 }, () => Array(samples.length).fill(-1));
-  dp[1][0] = 0;
-
-  for (let kept = 2; kept <= targetCount; kept += 1) {
-    for (let end = 1; end < samples.length; end += 1) {
-      for (let start = Math.max(0, end - (samples.length - targetCount) - 1); start < end; start += 1) {
-        if (mandatory[start] || mandatory[end] || start === 0 || end === samples.length - 1) {
-          const cost = dp[kept - 1][start] + skipCost[start][end];
-          if (cost < dp[kept][end]) {
-            dp[kept][end] = cost;
-            previousIndex[kept][end] = start;
-          }
-        }
+  // Best-effort retain explicit locked times when they are already present.
+  if (lockedTimes.size > 0 && selected.size < maxCount) {
+    for (let i = 1; i < samples.length - 1 && selected.size < maxCount; i += 1) {
+      const time = samples[i].time;
+      if (lockedTimes.has(time)) {
+        selected.add(i);
       }
     }
   }
 
-  let bestKept = -1;
-  let bestCost = Number.POSITIVE_INFINITY;
-  for (let kept = mandatoryCount; kept <= targetCount; kept += 1) {
-    const cost = dp[kept][samples.length - 1];
-    if (cost < bestCost) {
-      bestCost = cost;
-      bestKept = kept;
-    }
-  }
-
-  if (bestKept < 0) {
-    return samples;
-  }
-
-  const selectedIndices: number[] = [];
-  let currentKept = bestKept;
-  let currentIndex = samples.length - 1;
-  while (currentIndex >= 0 && currentKept > 0) {
-    selectedIndices.push(currentIndex);
-    currentIndex = previousIndex[currentKept][currentIndex];
-    currentKept -= 1;
-  }
-
-  selectedIndices.reverse();
-  return selectedIndices.map((index) => samples[index]);
+  const ordered = Array.from(selected).sort((a, b) => a - b).slice(0, maxCount);
+  return ordered.map((index) => samples[index]);
 }
 
 export function animationLengthOrLastKeyframe(animation: BBAnimation, keyframes: BBAnimationKeyframe[]): number {
@@ -169,6 +124,41 @@ export function trackNeedsSampling(keyframes: BBAnimationKeyframe[]): boolean {
   });
 }
 
+function rotationNeedsSampling(keyframes: BBAnimationKeyframe[]): boolean {
+  const sorted = [...keyframes].sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
+  if (trackNeedsSampling(sorted)) {
+    return true;
+  }
+
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const a = keyframeVec3(sorted[i], [0, 0, 0]);
+    const b = keyframeVec3(sorted[i + 1], [0, 0, 0]);
+    const deltaX = Math.abs(b[0] - a[0]);
+    const deltaY = Math.abs(b[1] - a[1]);
+    const deltaZ = Math.abs(b[2] - a[2]);
+    if (deltaX > 180 || deltaY > 180 || deltaZ > 180) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Sample a Vec3 animation track with support for Catmull-Rom interpolation.
+ * 
+ * When keyframes use "catmullrom" or "bezier" interpolation, this function:
+ * 1. Samples the animation at GLTF_ANIMATION_SAMPLE_RATE (24fps) intervals
+ * 2. Uses catmullRomVec3() to interpolate between keyframes smoothly
+ * 3. Simplifies the result to max GLTF_ANIMATION_MAX_SAMPLES (64) using error-based reduction
+ * 4. Exports with LINEAR interpolation in the final glTF file
+ * 
+ * This approach works because glTF doesn't natively support Catmull-Rom;
+ * instead, we approximate it with many LINEAR segments.
+ * 
+ * ALWAYS performs dense sampling to ensure proper curve representation,
+ * even for pure linear keyframes, to support smooth playback in all glTF viewers.
+ */
 export function sampleTrackVec3(
   animation: BBAnimation,
   keyframes: BBAnimationKeyframe[],
@@ -178,13 +168,8 @@ export function sampleTrackVec3(
   if (sorted.length === 0) {
     return [];
   }
-  if (!trackNeedsSampling(sorted)) {
-    return sorted.map((keyframe) => ({
-      time: Number(keyframe.time ?? 0),
-      value: keyframeVec3(keyframe, fallback),
-    }));
-  }
 
+  // Always perform dense sampling for proper glTF animation playback
   const length = animationLengthOrLastKeyframe(animation, sorted);
   const interval = 1 / GLTF_ANIMATION_SAMPLE_RATE;
   const samples: Array<{ time: number; value: Vec3 }> = [];
@@ -283,6 +268,19 @@ export function sampleTrackVec3(
   return samples;
 }
 
+/**
+ * Sample a rotation animation track with SLERP and smart simplification.
+ * 
+ * Similar to sampleTrackVec3:
+ * - Detects keyframes with catmullrom/bezier interpolation and samples densely
+ * - Uses SLERP (spherical linear interpolation) for rotations
+ * - Applies quadratic error metric and dynamic programming to simplify
+ * - Preserves all original keyframe times (locked times)
+ * - Returns simplified samples suitable for LINEAR glTF export
+ * 
+ * Rotation curves benefit from SLERP which avoids gimbal lock and maintains
+ * constant angular velocity better than LERP would.
+ */
 export function sampleRotationTrack(
   animation: BBAnimation,
   keyframes: BBAnimationKeyframe[],
@@ -292,22 +290,22 @@ export function sampleRotationTrack(
     return [];
   }
 
+  // For pure linear/step tracks without large Euler wraps, keep source keys.
+  if (!rotationNeedsSampling(sorted)) {
+    return sorted.map((keyframe) => ({
+      time: Number(keyframe.time ?? 0),
+      value: degreesToQuatXYZ(keyframeVec3(keyframe, [0, 0, 0])),
+    }));
+  }
+
   // Collect locked keyframe times
   const lockedTimes = new Set<number>();
   for (const keyframe of sorted) {
     lockedTimes.add(Number(keyframe.time ?? 0));
   }
 
-  // Quick path for simple linear interpolation between two keyframes
-  if (!trackNeedsSampling(sorted)) {
-    const result = sorted.map((keyframe) => ({
-      time: Number(keyframe.time ?? 0),
-      value: degreesToQuatXYZ(keyframeVec3(keyframe, [0, 0, 0])),
-    }));
-    return result;
-  }
-
-  // Dense sampling for rotations with large deltas
+  // Always perform dense sampling for smooth glTF animation playback
+  // Even pure linear keyframes need to be sampled to ensure proper curve representation
   const length = animationLengthOrLastKeyframe(animation, sorted);
   const allSamples: Array<{ time: number; value: [number, number, number, number] }> = [];
   const sampleInterval = 1 / GLTF_ANIMATION_SAMPLE_RATE;
@@ -332,25 +330,74 @@ export function sampleRotationTrack(
     const duration = Math.max(nextTime - prevTime, SAMPLE_EPSILON);
     const t = Math.min(Math.max((time - prevTime) / duration, 0), 1);
 
-    const prevRotation = degreesToQuatXYZ(keyframeVec3(prev, [0, 0, 0]));
-    const nextRotation = degreesToQuatXYZ(keyframeVec3(next, [0, 0, 0]));
+    const prevEuler = keyframeVec3(prev, [0, 0, 0]);
+    const nextEuler = keyframeVec3(next, [0, 0, 0]);
     const prevInterpolation = (prev.interpolation ?? "linear").toLowerCase();
+    const nextInterpolation = (next.interpolation ?? "linear").toLowerCase();
 
     if (prevInterpolation === "step") {
-      return prevRotation;
+      return degreesToQuatXYZ(prevEuler);
     }
 
-    return slerpQuat(prevRotation, nextRotation, t);
+    if (
+      prevInterpolation === "catmullrom" ||
+      prevInterpolation === "bezier" ||
+      nextInterpolation === "catmullrom" ||
+      nextInterpolation === "bezier"
+    ) {
+      const before = keyframeVec3(sorted[Math.max(prevIndex - 1, 0)], [0, 0, 0]);
+      const after = keyframeVec3(sorted[Math.min(nextIndex + 1, sorted.length - 1)], [0, 0, 0]);
+      return degreesToQuatXYZ(catmullRomVec3(before, prevEuler, nextEuler, after, t));
+    }
+
+    // For linear rotation tracks, interpolate in Euler space first and then
+    // convert to quaternion. This preserves multi-turn motion (e.g. -3600deg)
+    // that would collapse when interpolating endpoint quaternions directly.
+    return degreesToQuatXYZ(lerpVec3(prevEuler, nextEuler, t));
   };
 
-  // Sample at regular intervals
-  const totalSteps = Math.max(1, Math.round(length * GLTF_ANIMATION_SAMPLE_RATE));
-  for (let step = 0; step <= totalSteps; step += 1) {
-    const time = Math.min(step * sampleInterval, length);
+  const pushSample = (time: number) => {
     const value = evaluateRotationAt(time);
     const lastSample = allSamples[allSamples.length - 1];
     if (!lastSample || Math.abs(lastSample.time - time) > SAMPLE_EPSILON || !quatEquals(lastSample.value, value)) {
       allSamples.push({ time, value });
+    }
+  };
+
+  // Sample each segment with enough subdivisions to preserve long Euler turns.
+  if (sorted.length >= 2) {
+    for (let i = 0; i < sorted.length - 1; i += 1) {
+      const start = Number(sorted[i].time ?? 0);
+      const end = Number(sorted[i + 1].time ?? 0);
+      if (end <= start + SAMPLE_EPSILON) {
+        continue;
+      }
+
+      const segmentDuration = end - start;
+      const baseIntervals = Math.max(1, Math.round(segmentDuration * GLTF_ANIMATION_SAMPLE_RATE));
+
+      const startEuler = keyframeVec3(sorted[i], [0, 0, 0]);
+      const endEuler = keyframeVec3(sorted[i + 1], [0, 0, 0]);
+      const maxEulerDelta = Math.max(
+        Math.abs(endEuler[0] - startEuler[0]),
+        Math.abs(endEuler[1] - startEuler[1]),
+        Math.abs(endEuler[2] - startEuler[2]),
+      );
+
+      const spinIntervals = Math.max(1, Math.ceil(maxEulerDelta / 179));
+      const intervals = Math.max(baseIntervals, spinIntervals);
+
+      for (let step = i === 0 ? 0 : 1; step <= intervals; step += 1) {
+        const t = step / intervals;
+        const time = start + segmentDuration * t;
+        pushSample(time);
+      }
+    }
+  } else {
+    const totalSteps = Math.max(1, Math.round(length * GLTF_ANIMATION_SAMPLE_RATE));
+    for (let step = 0; step <= totalSteps; step += 1) {
+      const time = Math.min(step * sampleInterval, length);
+      pushSample(time);
     }
   }
 

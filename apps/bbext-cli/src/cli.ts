@@ -1,5 +1,3 @@
-#!/usr/bin/env bun
-
 import { parseArgs } from "./args";
 import { runDefaultConversion, runManifestConversion } from "./conversion";
 import { fatalError } from "./errors";

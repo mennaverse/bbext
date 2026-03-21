@@ -9,9 +9,6 @@
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "types": [
-      "bun-types"
-    ]
+    "forceConsistentCasingInFileNames": true
   }
 }

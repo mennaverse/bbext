@@ -399,6 +399,13 @@ function buildMeshInputs(
       const jointNodeIndices = [...groupNodes.pathToNode.entries()]
         .filter(([path]: [string, any]) => path === topLevelPath || path.startsWith(`${topLevelPath}/`))
         .sort(([pathA]: [string, any], [pathB]: [string, any]) => {
+          const visitA = groupNodes.pathVisitOrder.get(pathA);
+          const visitB = groupNodes.pathVisitOrder.get(pathB);
+          if (visitA !== undefined && visitB !== undefined) {
+            return visitA - visitB;
+          }
+
+          // Fallback when visit order is missing: keep deterministic ordering.
           const depthDiff = pathA.split("/").length - pathB.split("/").length;
           if (depthDiff !== 0) {
             return depthDiff;
@@ -687,7 +694,10 @@ function buildMeshEntry(
         }
 
       const baseVertex = positions.length / 3;
-      const appliedOffset = entry.jointIndex === 0 ? positionOffset : [0, 0, 0];
+      // Vertices are authored in model/world space at this point, while the mesh node
+      // is translated by positionOffset. Subtract the same offset for all vertices so
+      // mesh-local coordinates stay aligned with joint transforms.
+      const appliedOffset = positionOffset;
       for (const p of face.positions) {
         positions.push(p[0] - appliedOffset[0], p[1] - appliedOffset[1], p[2] - appliedOffset[2]);
       }
