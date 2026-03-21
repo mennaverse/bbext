@@ -205,7 +205,7 @@ Example JSON result:
 		{
 			"model": "models/character.bbmodel",
 			"output": "exports/character.gltf",
-			"metadataJson": "{\"asset\":\"character\",\"lod\":0}",
+			"metadata": {"asset": "character", "lod": 0},
 			"exported": [
 				"C:/path/to/exports/character.gltf"
 			]
@@ -215,7 +215,7 @@ Example JSON result:
 		{
 			"model": "models/missing.bbmodel",
 			"output": "exports/missing.gltf",
-			"metadataJson": "{\"asset\":\"missing\"}",
+			"metadata": {"asset": "missing"},
 			"exported": [],
 			"error": "ENOENT: no such file or directory ..."
 		}

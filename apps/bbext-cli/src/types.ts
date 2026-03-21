@@ -15,8 +15,8 @@ export interface CliOptions {
   organizeByModel?: "file-name" | "model-id";
   modelScale?: number;
   embedTextures: boolean;
-  exportGroupsAsArmature: boolean;
-  exportAnimations: boolean;
+  exportGroupsAsArmature?: boolean;
+  exportAnimations?: boolean;
   overwrite: boolean;
   cleanOutput: boolean;
   cleanOutputGodot: boolean;
@@ -43,7 +43,7 @@ export interface ManifestSpec {
 export interface JsonResultItem {
   model: string;
   output: string;
-  metadataJson?: string;
+  metadata?: unknown;
   exported: string[];
   error?: string;
 }

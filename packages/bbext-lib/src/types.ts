@@ -87,6 +87,15 @@ export interface BBModel {
   groups?: BBGroup[];
   outliner?: BBOutlinerNode[];
   animations?: BBAnimation[];
+  export_options?: {
+    gltf?: {
+      encoding?: string;
+      scale?: number;
+      embed_textures?: boolean;
+      armature?: boolean;
+      animations?: boolean;
+    };
+  };
 }
 
 export type FaceName = "north" | "south" | "east" | "west" | "up" | "down";

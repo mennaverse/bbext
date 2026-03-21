@@ -3,7 +3,7 @@ import { convertBBModelsRecursively } from "@bbext/lib";
 import { loadManifest } from "./manifest";
 import { printJsonProgress, printProgress } from "./progress";
 import type { CliOptions, JsonResultItem, JsonSummary } from "./types";
-import { metadataToJsonText, outputExtensionFromPath } from "./utils";
+import { outputExtensionFromPath } from "./utils";
 
 export async function runManifestConversion(options: CliOptions): Promise<JsonSummary> {
   if (!options.manifestPath) {
@@ -33,7 +33,7 @@ export async function runManifestConversion(options: CliOptions): Promise<JsonSu
     const resultBase: JsonResultItem = {
       model: modelSpec.bbmodel,
       output: modelSpec.output,
-      metadataJson: metadataToJsonText(modelSpec.metadata),
+      metadata: modelSpec.metadata,
       exported: [],
     };
 

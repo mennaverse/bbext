@@ -73,11 +73,16 @@ export function generateGltfData(
   textureKeys?: Set<string>,
 ): GltfData {
   const modelName = modelFileNameFromPath(outputFilePath);
+  const modelGltfExportOptions = model.export_options?.gltf;
   const finalScale = options.modelScale ?? scale;
   const textureMap = resolveTextureMap(model);
   const embedTextures = Boolean(options.embedTextures);
-  const exportGroupsAsArmature = Boolean(options.exportGroupsAsArmature);
-  const exportAnimations = Boolean(options.exportAnimations);
+  const exportGroupsAsArmature = options.exportGroupsAsArmature
+    ?? modelGltfExportOptions?.armature
+    ?? false;
+  const exportAnimations = options.exportAnimations
+    ?? modelGltfExportOptions?.animations
+    ?? false;
   const useGroupHierarchy = exportGroupsAsArmature || exportAnimations;
   const allFaceBatches = filterFaceBatches(buildFaceBatches(model, sceneElements, finalScale), { textureKeys });
   const materialRefs = collectMaterialRefs(model, allFaceBatches);

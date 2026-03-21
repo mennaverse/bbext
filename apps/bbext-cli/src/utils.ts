@@ -32,9 +32,3 @@ export function sanitizeManifestName(input: string): string {
   return sanitized.length > 0 ? sanitized : "model";
 }
 
-export function metadataToJsonText(metadata: unknown): string | undefined {
-  if (metadata === undefined) {
-    return undefined;
-  }
-  return JSON.stringify(metadata);
-}
